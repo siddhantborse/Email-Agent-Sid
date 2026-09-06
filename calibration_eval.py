@@ -194,7 +194,7 @@ def audit(before: Decision, after: Decision) -> tuple[bool, bool]:
 
 def run_rounds(
     golden: list[Decision], *, rounds: int, seed: int, policy: Policy = USER_POLICY
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], InMemoryStore]:
     """
     Replay the corpus `rounds` times against one simulated user.
 
@@ -248,8 +248,7 @@ def run_rounds(
             if now.final_lane == "ASK" and key in policy:
                 memory.record(store, USER, now.sender_email, now.action, sample(rng, policy[key]))
 
-    history[-1]["_store"] = store
-    return history
+    return history, store
 
 
 # --------------------------------------------------------------------------
@@ -377,7 +376,7 @@ def seed_stability(golden: list[Decision], *, rounds: int, seeds: int) -> dict[s
     finals = []
     worst_unsafe = 0
     for seed in range(seeds):
-        history = run_rounds(golden, rounds=rounds, seed=seed)
+        history, _ = run_rounds(golden, rounds=rounds, seed=seed)
         finals.append(history[-1]["ask"])
         worst_unsafe = max(worst_unsafe, max(h["unsafe_promotions"] for h in history))
     return {
