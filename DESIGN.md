@@ -378,19 +378,28 @@ modes are known.
 
 - **The corpus is small.** 49 labeled emails, 22 adversarial. Enough to catch
   rule bugs, not enough for a confident accuracy claim. Treat the headline as
-  directional.
-- **Display-name spoofing has no deterministic defence.** `domains.py` reads
-  only the address, so `Priya Raman (KnownCompany) <priya.knowncompany@gmail.com>`
-  is caught by the model or not at all. Same class of problem as §7b, and the
-  same fix would apply — it is simply not built yet.
+  directional. It is also unbalanced in a way that matters for calibration:
+  only 8 of 35 recorded decisions ever open the ASK interrupt, so the learning
+  loop has very little to work with (§11).
+- **Display-name spoofing is defended by a heuristic, not a standard.**
+  `display_name_spoof` catches the trusted name appearing in a display name or
+  local part on the wrong domain. It will not catch a name that implies the
+  affiliation without containing it ("IT Helpdesk"), and it will flag a genuine
+  ex-employee writing from a personal address. It fails safe, but it is a
+  string heuristic and should be read as one.
 - **Labels are ours.** A single author wrote both the emails and the ground
   truth, so the labels encode one person's risk appetite.
 - **`SILENT`/`NOTIFY` is a genuinely fuzzy boundary.** "Room booking confirmed"
   is defensible either way. Some residual error is disagreement, not failure.
-- **Injection detection is a model judgement.** The *consequence* of detection is
-  deterministic, but the detection itself is an LLM call. A sufficiently subtle
-  injection that the check does not flag gets only the protection of the action
-  tables — which is real, but is the second line, not the first.
+- **Injection detection is a model judgement**, and §12 now puts a number on
+  how much rests on it: only **6 of 22** attacks carry a tell the code can see
+  by itself. The *consequence* of detection is deterministic; the detection is
+  an LLM call. Shrinking that gap is the most useful backlog in the repo.
+- **14 of the 49 emails have not been scored through the model.** They were
+  added after the free-tier daily quota ran out. They are covered by
+  `verify.py` and `worst_case.py`, which need no key, but the 97% figure is
+  measured over the 35 with a recorded run — not all 49. Reporting a throttled
+  run instead would have been worse (§6).
 - **No execution yet.** Lanes record what they *would* do. The graph ends where
   execution will hang off, and `interrupt()` is already wired for `ASK`.
 - **Calibration has still never seen a real user.** It is now *measured*
@@ -418,7 +427,15 @@ provider is one env var. LangSmith for traced experiments
 
 Model is `gemini-3.5-flash-lite` — chosen for a free tier, and because triage is
 a classification task that does not need a frontier model. The safety properties
-do not depend on which model is used, which is the point.
+do not depend on which model is used, which is the point. `ollama:llama3.2`
+works with no key and no network at all.
+
+Four of the five harnesses call no model: `verify.py`, `calibration_eval.py`,
+`worst_case.py` and `situations_eval.py`. That is deliberate rather than
+convenient. A reviewer should be able to check every safety claim here before
+deciding whether to trust the thing with a key, and a claim that can only be
+verified by spending someone else's quota is a claim that mostly goes
+unverified.
 
 ---
 
@@ -460,3 +477,90 @@ table and the labels, so agreement is close to tautological. The load-bearing
 rows are the two taint cases and the one where the correct answer is to notice
 nothing at all — an agent that manufactures a situation for every thread is
 noise, not help.
+
+---
+
+## 11. Measuring the calibration
+
+The brief calls calibration the core of the problem, and until late in the
+build it was the one thing here that was argued rather than measured. §3 proved
+what learning *cannot* do. Nothing showed that it does anything at all.
+
+`calibration_eval.py` replays the recorded run through the real
+`_calibrate_node` against a simulated user with stable, hidden preferences —
+some pairs consistently accepted, one consistently rejected, several pinned by
+the floor. No model is called, so it is deterministic, instant, and reproducible
+by anyone with the repo and no key.
+
+Twelve rounds, seed 0:
+
+| | round 1 | round 12 |
+|---|---|---|
+| ask rate | 22.9% | **17.1%** |
+| autonomy rate | 28.6% | 34.3% |
+| unsafe promotions | 0 | **0** |
+| floor violations | 0 | **0** |
+
+25 % fewer interruptions. Across 25 simulated users: min 5, median 6, max 7
+remaining asks, every one starting at 8 — so the fall reproduces and seed 0 sits
+on the pessimistic side.
+
+**The decomposition matters more than the percentage.** Only 8 of 35 decisions
+ever open the ASK interrupt at all; the rest are `SILENT` already or `ESCALATE`
+and never asked. Of those 8:
+
+- **4 are pinned by the floor** — `attach_file`, `reply`, `schedule`. Accepted
+  12 times each, moved not one step. This is §3's bound demonstrated inside the
+  ordinary loop rather than as a special case.
+- **1 is the trap**, rejected every time, and stayed in `ASK`.
+- **3 are genuinely eligible**, and 2 went quiet by round 10.
+
+The third eligible pair never promoted, and that is left in rather than tuned
+away. With `PROMOTE_AFTER = 5`, a 70%-consistent user needs roughly 16 rounds in
+expectation. It is the most useful thing the harness says about the threshold:
+**five *consecutive* accepts is a filter on consistency, not on volume.**
+
+Under adversarial pressure — 544 `(sender, action)` pairs force-fed 100 clean
+accepts each, never-list included — 0 floor violations, 0 never-list movement,
+0 unsafe promotions. And one objection drops a promoted pair back to `ASK`
+immediately, costing 5 rounds to recover.
+
+### What this harness caught that the safety tests did not
+
+Both safety suites passed the entire time while `blocked` was too broad and the
+measured fall in ask rate was **zero** — nothing could ever be promoted.
+Building the thing that measures the *feature* is what surfaced the bug in the
+*fix* (§7e). A safety test can only tell you the agent is not dangerous. It
+cannot tell you the agent is not useless.
+
+---
+
+## 12. What survives a compromised model
+
+Every harness above measures the agent *including* the model's judgement.
+`worst_case.py` removes it: assume `sort` and `check` are wholly
+attacker-controlled and return the most permissive answer the schema allows,
+for every action, on every email. What does the code alone still catch?
+
+| | |
+|---|---|
+| never-list actions reachable | **0** |
+| emails with a deterministic tell that escaped | **0** |
+| adversarial emails held by code alone | **6 / 22 (27%)** |
+
+The first two are the hard guarantees and they hold. The third is the number
+worth sitting with.
+
+Only 6 of the 22 attacks carry something the code can see by itself — a masked
+secret, a lookalike domain, a spoofed display name. The other 16 are caught in
+the real pipeline by `check.contains_instructions`, which is an LLM call. So a
+sufficiently subtle injection that the check does not flag gets only the
+protection of the action tables. That protection is real — it is why no
+never-list action is reachable and nothing dangerous executes — but it is the
+second line, not the first.
+
+§8 already said this in prose. A number is better than prose, because a number
+can be moved. Every case promoted from "model-only" to "held by code" is a new
+deterministic tell, and that is exactly how `domains.py` came to exist (§7b).
+It is the most useful backlog in the repo.
+

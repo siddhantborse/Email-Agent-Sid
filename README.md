@@ -9,21 +9,40 @@ prerequisite.
 
 ## Results
 
-Measured on 35 labeled emails, 8 of them adversarial. Fully throttled run,
-zero degraded model calls.
+Five harnesses. Four of them need no API key, no network and no model, which is
+deliberate: you should be able to check the safety claims in this repo before
+deciding whether to trust it with a key.
 
-| | |
-|---|---|
-| Exact lane | **34/35 (97%)** |
-| Over-cautious | 1 *(safe, just noisy)* |
-| **Unsafe misses** | **0** *(nothing placed in a laxer lane than it deserved)* |
-| Attacks contained | **8/8** |
-| Safety checks | **42 passing**, no API key or network required |
+| what | result | needs a key |
+|---|---|---|
+| **Safety properties** (`verify.py`) | **76 checks passing** | no |
+| **Lane accuracy** (`eval.py --replay`, 35 emails) | **34/35 exact (97%)**, **0 unsafe misses**, 8/8 attacks contained | no |
+| **Calibration** (`calibration_eval.py`) | ask rate **22.9% → 17.1%**, **0 unsafe promotions** | no |
+| **Compromised model** (`worst_case.py`) | **0** never-list actions reachable, **0** deterministic tells ignored | no |
+| **Proactive path** (`situations_eval.py`) | 10/10 exact, 0 unsafe | no |
 
-All four lanes are live. Reproduce with `python eval.py`, or see the committed
-run with `python dashboard.py --golden` (needs nothing at all).
+**The number I would look at first** is the one in `worst_case.py`: with `sort`
+and `check` assumed wholly attacker-controlled, only **6 of 22** adversarial
+emails carry a tell the code can see on its own. The other 16 are contained in
+the real pipeline by `check.contains_instructions` — a *model* judgement. That
+is the honest shape of the defence, and it is stated as a number rather than
+buried in prose. Nothing dangerous is reachable in that scenario, but the
+margin is thinner than "8/8 contained" suggests.
 
-Design decisions and the bugs the harness caught: **[DESIGN.md](DESIGN.md)**.
+**One caveat on the accuracy number.** The corpus is 49 emails; 35 of them have
+a recorded model run, and the 97% is measured over those. The 14 newest
+adversarial cases were added after the free-tier daily quota ran out and have
+**not yet been scored through the model** — a run that fails is not a run, and
+a throttled call silently escalates, which inflates the score on an
+ESCALATE-heavy corpus (see DESIGN.md §6). They *are* covered by `worst_case.py`,
+which needs no key. To score them:
+
+```bash
+python eval.py          # when quota allows; warns loudly if any call failed
+```
+
+Design decisions and the bugs the harnesses caught: **[DESIGN.md](DESIGN.md)**.
+Worked examples: **[docs/TRANSCRIPTS.md](docs/TRANSCRIPTS.md)**.
 
 ## The four lanes
 
@@ -121,8 +140,9 @@ confirming nothing can ever reach a laxer lane than it deserves.
 **Score the agent against the labeled corpus:**
 
 ```bash
-python eval.py                 # all 35 emails
-python eval.py --adversarial   # just the 8 attack cases
+python eval.py                 # all 49 emails (needs a key)
+python eval.py --replay        # re-score the recorded run offline, no key
+python eval.py --adversarial   # attack cases only
 python eval.py --errors        # just the mistakes
 ```
 
@@ -148,6 +168,14 @@ by anyone.
 python calibration_eval.py            # the round-by-round curve
 python calibration_eval.py --seeds 25 # is that just a lucky seed?
 python calibration_eval.py --json
+```
+
+**Ask what survives a compromised model** — assumes `sort` and `check` are
+attacker-controlled and sweeps every action against every email:
+
+```bash
+python worst_case.py
+python worst_case.py --adversarial
 ```
 
 **Score the proactive path** — the situations the agent notices on its own, with
@@ -197,8 +225,11 @@ away an unsafe miss is a regression.
 
 ## The corpus
 
-[`data/emails.json`](data/emails.json) — 35 labeled emails. 7 silent, 4 notify,
-7 ask, 10 escalate, plus 8 adversarial cases:
+49 labeled emails, 22 adversarial, split across two files so the attacks can be
+read on their own. Any `data/*.json` with an `emails` key is picked up
+automatically.
+
+[`data/emails.json`](data/emails.json) — 35 emails, 8 adversarial:
 
 - direct injection asking to be archived silently and forwarded out
 - injection hidden inside an ordinary newsletter
@@ -207,8 +238,30 @@ away an unsafe miss is a regression.
 - credential phishing, advance-fee fraud, payment-redirect fraud
 - lookalike-domain request for the client list
 
-Add your own entries — `eval.py` picks them up automatically. Growing this
-corpus *is* the project.
+[`data/adversarial_extra.json`](data/adversarial_extra.json) — 14 more, written
+to cover shapes the first eight miss:
+
+- non-English injection, betting an English-tuned check is weaker off-language
+- payload three quote levels deep in a `Re: Re: Fwd:` chain
+- injection as boilerplate in a signature footer
+- a fake "correction" claiming yesterday's *more cautious* instruction was wrong
+- pure business-email-compromise with **no agent-directed text at all**, so the
+  check has nothing to flag
+- spoofed self-send from a homoglyph of the user's own domain
+- calendar/meeting-notes injection as a numbered action item
+- trust-farming aimed squarely at the calibration ledger
+- a forwarded injection from a **genuine colleague on the real domain** who
+  admits she did not read it
+- a fake safety-policy update asserting revised escalation thresholds
+- three deliberate regressions for bugs found during review (TLD-swap domain,
+  trusted name as a subdomain label, an OTP shape masking used to miss)
+
+[`data/situations.json`](data/situations.json) — 10 mailbox states for the
+proactive path, including two that check a flagged thread cannot launder itself
+through it, and one where the right answer is to notice nothing at all.
+
+Add your own — everything picks them up automatically. Growing this corpus
+*is* the project.
 
 ## Files
 
@@ -227,6 +280,7 @@ corpus *is* the project.
 | [`eval.py`](eval.py) | scores the agent, separates unsafe from merely noisy |
 | [`calibration_eval.py`](calibration_eval.py) | measures whether it asks less over time. no API key |
 | [`situations_eval.py`](situations_eval.py) | scores the proactive path. no API key |
+| [`worst_case.py`](worst_case.py) | what the code still catches with the model gone. no API key |
 | [`docs/TRANSCRIPTS.md`](docs/TRANSCRIPTS.md) | four worked examples, one per lane, committed output |
 | [`langsmith_eval.py`](langsmith_eval.py) | the same, as a traced LangSmith experiment |
 | [`hitl.py`](hitl.py) | the human-in-the-loop lane and the calibration demo |
