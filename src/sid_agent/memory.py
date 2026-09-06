@@ -74,6 +74,16 @@ Outcome = Literal["accepted", "edited", "rejected"]
 # How many clean accepts in a row before a pair earns a step of autonomy.
 PROMOTE_AFTER = 5
 
+# The quietest lane trust can ever buy. Promotion stops here even when the
+# action's own floor is lower.
+#
+# `archive` and `label` have floor SILENT, so without this ceiling a NOTIFY
+# decision could be learned all the way down to SILENT -- "handle it and tell
+# me" quietly becoming "handle it and say nothing". That is the failure mode
+# this whole project is organised around: the one the user never finds out
+# about. DESIGN.md claimed this was impossible before it was true.
+PROMOTION_CEILING: rules.Lane = "NOTIFY"
+
 # Only these actions can ever earn autonomy. Anything that sends a file out or
 # talks to someone new stays a human decision forever.
 PROMOTABLE = {"archive", "label", "reply_scheduling", "schedule", "none"}
@@ -149,6 +159,16 @@ def earned_lane(
     if blocked or action not in PROMOTABLE:
         return current_lane, None
 
+    # ESCALATE is a verdict, not an opening bid. Something reached it because a
+    # rule fired -- a never-list action, a masked secret, a spoofed domain -- and
+    # no amount of unrelated good behaviour from the same sender is evidence
+    # against that specific rule. Without this, a sender whose ordinary mail the
+    # user waves through five times could soften their *next* escalation one
+    # step, because the clamped action `none` has floor SILENT and so looks
+    # freely promotable.
+    if current_lane == "ESCALATE":
+        return current_lane, None
+
     rec = get(store, user_id, sender_email, action)
     if rec["streak"] < PROMOTE_AFTER:
         return current_lane, None
@@ -159,6 +179,7 @@ def earned_lane(
 
     one_step_down = rules.LANES[rank - 1]
     promoted = rules.more_cautious(one_step_down, floor)
+    promoted = rules.more_cautious(promoted, PROMOTION_CEILING)
 
     if promoted == current_lane:
         return current_lane, None

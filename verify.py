@@ -204,6 +204,26 @@ check("an unrelated domain is not a lookalike", lookalike_of("z@other.example", 
 check("no known domains configured -> no false positives", lookalike_of("a@anything.example", set()) is None)
 
 
+
+# Regressions for the shapes that used to evade lookalike detection entirely.
+# Each of these was a confirmed miss: the same attack body from a differently
+# shaped domain sailed past the deterministic layer and landed on model
+# judgement alone.
+KNOWN = {"knowncompany.example"}
+for addr, want, why in [
+    ("d@knowncompany.com", True, "TLD swap -- the most common real spoof shape"),
+    ("d@knowncompany.co", True, "shortened TLD"),
+    ("d@knowncompany.example.evil.com", True, "trusted name as a subdomain label"),
+    ("d@knowncompany.secure-mail.example", True, "trusted name buried mid-domain"),
+    ("d@knowncompany.example.", False, "trailing dot is the same host, not a spoof"),
+    ("d@knowwncommpanny.example", True, "three-edit typo"),
+    ("d@know.example", False, "a short real domain is not an impersonation"),
+    ("d@own.example", False, "substring of the trusted name, but unrelated"),
+    ("d@supplier.example", False, "ordinary unrelated sender"),
+]:
+    got = lookalike_of(addr, KNOWN) is not None
+    check(f"{'caught' if want else 'allowed'}: {why}", got == want, f"{addr} -> {got}")
+
 print("\n--- calibration: learning is bounded by the rules table ---")
 
 from langgraph.store.memory import InMemoryStore  # noqa: E402
@@ -240,9 +260,67 @@ lane, _ = memory.earned_lane(
 )
 check("blocked email refuses promotion despite 50 accepts", lane == "ASK", lane)
 
-s = store_with("reply_scheduling", ["accepted"] * 50)
-lane, _ = memory.earned_lane(s, "u", "someone@example.com", "reply_scheduling", "NOTIFY")
-check("promotion never reaches SILENT", lane != "SILENT", lane)
+# This check used to use `reply_scheduling`, whose floor is already NOTIFY -- so
+# it could not fail no matter what the code did, and it did not fail while
+# `archive` and `label` were being promoted straight into SILENT. A test that
+# cannot fail is worse than no test: it occupies the space where a real one
+# would have gone. Every action whose floor is SILENT is now swept.
+into_silent = [
+    a for a in sorted(memory.PROMOTABLE)
+    if rules.min_lane_for(a) == "SILENT"
+    and memory.earned_lane(
+        store_with(a, ["accepted"] * 100), "u", "someone@example.com", a, "NOTIFY"
+    )[0] == "SILENT"
+]
+check(
+    f"no promotable action ({', '.join(sorted(memory.PROMOTABLE))}) can be learned into SILENT",
+    not into_silent,
+    str(into_silent),
+)
+
+# ESCALATE is a verdict, not an opening bid.
+out_of_escalate = [
+    a for a in sorted(memory.PROMOTABLE)
+    if memory.earned_lane(
+        store_with(a, ["accepted"] * 100), "u", "someone@example.com", a, "ESCALATE"
+    )[0] != "ESCALATE"
+]
+check(
+    "no run of accepts can soften an ESCALATE",
+    not out_of_escalate,
+    str(out_of_escalate),
+)
+
+# The composed path. Sweeping `decide` alone and `earned_lane` alone both passed
+# while the seam between them leaked: `blocked` did not account for a lane that
+# `decide` had raised, so a farmed streak could undo a lookalike-domain or
+# never-list escalation. Compose them and check the whole thing.
+composed = []
+for lane_in in rules.LANES:
+    for action in sorted(memory.PROMOTABLE):
+        for kwargs in (
+            {"action": "send_money"},
+            {"action": "not_a_real_action"},
+            {"masked": ["otp"]},
+            {"instructions": True},
+            {"raise_to": "ESCALATE"},
+            {"signals": ["payment due"]},
+        ):
+            d = decide(lane=lane_in, **kwargs)
+            st = store_with(d.action, ["accepted"] * 100)
+            earned, _ = memory.earned_lane(
+                st, "u", "someone@example.com", d.action, d.final_lane,
+                blocked=(bool(d.masked) or d.contains_instructions
+                         or bool(d.raises) or bool(d.important_signals)),
+            )
+            if rules._RANK[earned] < rules._RANK[d.final_lane]:
+                composed.append((lane_in, action, kwargs, d.final_lane, earned))
+check(
+    f"decide -> calibrate composed: no raise can be undone by the ledger "
+    f"({len(rules.LANES) * len(memory.PROMOTABLE) * 6} combinations)",
+    not composed,
+    str(composed[:3]),
+)
 
 breach = None
 for action in rules.KNOWN_ACTIONS:
@@ -267,6 +345,109 @@ for action in rules.NEVER:
         never_moved = (action, lane)
         break
 check("never-list actions stay at ESCALATE forever", never_moved is None, str(never_moved))
+
+
+# ---------------------------------------------------------------------------
+# the proactive path: same floor, different entry point
+# ---------------------------------------------------------------------------
+print("\n--- proactive situations (no model call anywhere in this path) ---")
+
+from sid_agent import situations as sit  # noqa: E402
+
+# The exhaustive one. Every row of the playbook is a lane a human wrote by hand,
+# and a hand-written lane is exactly the kind of thing that drifts below its
+# floor during a refactor. Checking the table itself is worth more than checking
+# any single situation that flows through it.
+bad_rows = [
+    (kind, lane, action, rules.min_lane_for(action))
+    for kind, (action, lane) in sit.PLAYBOOK.items()
+    if rules.more_cautious(lane, rules.min_lane_for(action)) != lane
+]
+check(
+    f"all {len(sit.PLAYBOOK)} playbook rows start at or above their action's floor",
+    not bad_rows,
+    str(bad_rows),
+)
+check(
+    "every playbook action is a known action",
+    all(a in rules.KNOWN_ACTIONS for a, _ in sit.PLAYBOOK.values()),
+    str([a for a, _ in sit.PLAYBOOK.values() if a not in rules.KNOWN_ACTIONS]),
+)
+check(
+    "no playbook row proposes a never-list action",
+    all(a not in rules.NEVER for a, _ in sit.PLAYBOOK.values()),
+)
+
+
+def situate(kind, **kw):
+    return sit.decide_situation(
+        sit.Situation(id="t", kind=kind, sender_email="x@y.example", subject="s", **kw)
+    )
+
+
+check(
+    "an unknown situation kind escalates",
+    situate("not_a_real_kind").final_lane == "ESCALATE",
+)
+check(
+    "an unknown situation kind takes no action",
+    situate("not_a_real_kind").action == "none",
+)
+for kind in sit.ALWAYS_ESCALATE:
+    check(
+        f"'{kind}' reaches a human",
+        situate(kind).final_lane == "ESCALATE",
+    )
+check(
+    "a tainted thread escalates on the proactive path",
+    situate("unconfirmed_meeting", tainted=True).final_lane == "ESCALATE",
+)
+
+# The lateral-movement check. A thread blocked on the reactive path must not be
+# able to earn autonomy by coming back round through the proactive one, however
+# trusted its sender is.
+lat_store = InMemoryStore()
+for _ in range(100):
+    memory.record(lat_store, "u", "x@y.example", "reply_scheduling", "accepted")
+laundered = sit.decide_situation(
+    sit.Situation(id="t", kind="unconfirmed_meeting", sender_email="x@y.example",
+                  subject="s", tainted=True),
+    store=lat_store, user_id="u",
+)
+check(
+    "100 accepts cannot launder a tainted thread into autonomy",
+    laundered.final_lane == "ESCALATE",
+    laundered.final_lane,
+)
+
+# And the floor holds under calibration on this path too -- the ledger is shared
+# between the two entry points, so proving it once on email is not enough.
+sit_floor_violations = []
+for kind, (action, _) in sit.PLAYBOOK.items():
+    st = InMemoryStore()
+    for _ in range(100):
+        memory.record(st, "u", "x@y.example", action, "accepted")
+    got = sit.decide_situation(
+        sit.Situation(id="t", kind=kind, sender_email="x@y.example", subject="s"),
+        store=st, user_id="u",
+    )
+    floor = rules.min_lane_for(got.action)
+    if rules.more_cautious(got.final_lane, floor) != got.final_lane:
+        sit_floor_violations.append((kind, got.final_lane, floor))
+    if kind in sit.ALWAYS_ESCALATE and got.final_lane != "ESCALATE":
+        sit_floor_violations.append((kind, got.final_lane, "ESCALATE"))
+check(
+    "no situation, after 100 accepts, can be learned below its floor",
+    not sit_floor_violations,
+    str(sit_floor_violations),
+)
+check(
+    "the final action is always permitted by the final lane (situations)",
+    all(
+        rules.is_allowed(d.final_lane, d.action)
+        for d in (situate(k) for k in list(sit.PLAYBOOK) + ["bogus"])
+    ),
+)
 
 
 print()

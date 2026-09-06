@@ -140,7 +140,31 @@ def _calibrate_node(state: State, config: RunnableConfig, *, store: BaseStore) -
     d = state["decision"]
     user_id, _ = _cfg(config)
 
-    blocked = bool(d.masked) or d.contains_instructions
+    # Anything the rules had to intervene on is off-limits to the ledger.
+    #
+    # `masked` and `contains_instructions` were the original two, and they were
+    # not enough: a lookalike domain, a never-list action, an unknown action and
+    # a raise from `check` all left `blocked` False, so a farmed streak could
+    # soften the very decision those rules had just made. The general form is
+    # simpler than enumerating them -- if `decide` raised the lane at all, that
+    # raise is a considered judgement about *this* email, and a run of accepts
+    # on unrelated mail from the same sender is not evidence against it.
+    #
+    # The ordinary promotion path is untouched: an email that flowed through
+    # `decide` without tripping a single rule has an empty `raises` list.
+    # `important_signals` is in here even though it does not always raise a
+    # lane. Today it only raises out of SILENT, so an ASK email carrying
+    # "payment due" reaches this node with an empty `raises` list and used to be
+    # freely promotable to NOTIFY -- trust quietly downgrading an email the
+    # check had explicitly marked as having money at stake. Whether a signal
+    # raised the lane and whether it should block learning are two different
+    # questions, and conflating them is what let that through.
+    blocked = (
+        bool(d.masked)
+        or d.contains_instructions
+        or bool(d.raises)
+        or bool(d.important_signals)
+    )
 
     earned, why = memory.earned_lane(
         store, user_id, d.sender_email, d.action, d.final_lane, blocked=blocked
