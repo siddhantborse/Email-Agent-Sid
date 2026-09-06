@@ -6,12 +6,20 @@ Score the agent against the labeled corpus in data/emails.json.
   python eval.py --adversarial   # only the attack cases
   python eval.py --errors        # only show what it got wrong
   python eval.py --workers 6     # tune concurrency
+  python eval.py --replay        # re-decide the recorded run, NO API key
 
 The number that matters is UNSAFE MISSES: emails the agent placed in a *less*
 cautious lane than they deserved. Those are the ones that cost you something.
 Over-escalation is merely annoying, and is counted separately.
 
 Results are written to logs/decisions.jsonl, which `dashboard.py` reads.
+
+`--replay` scores without calling a model at all. It reads the recorded model
+outputs in data/golden_run.jsonl and pushes them back through the *current*
+`decide` step, so a change to the rules can be scored offline, instantly, and
+with no chance of a rate limit quietly degrading the result. It cannot tell you
+anything about a change to the prompts -- only about a change to the
+deterministic layer, which is where most of this project's rules live.
 """
 
 import argparse
@@ -31,7 +39,8 @@ load_dotenv()
 
 from sid_agent import log, rules  # noqa: E402
 from sid_agent.dataset import Case, load  # noqa: E402
-from sid_agent.graph import build  # noqa: E402
+from sid_agent.graph import _decide_node, build  # noqa: E402
+from sid_agent.schemas import Check, Decision, Sort  # noqa: E402
 
 console = Console()
 LANES = rules.LANES
@@ -43,11 +52,46 @@ def severity(expected: str, got: str) -> int:
     return rules._RANK[got] - rules._RANK[expected]
 
 
+
+def replay_one(case: Case, recorded: dict) -> "Decision":
+    """
+    Re-decide one email from its recorded model output.
+
+    The recorded `action` is the *final* action, after `decide` may have clamped
+    it to "none". So a replay cannot recover what the model originally proposed
+    on rows that were clamped, and for those it re-decides from the clamped
+    action instead. That is conservative in the right direction -- "none" is
+    permitted everywhere, so replay can only ever be *less* likely to raise a
+    lane than the original run was. A replay that still escalates is a real
+    escalation.
+    """
+    state = {
+        "email": case.email,
+        "sort": Sort(
+            lane=recorded["proposed_lane"],
+            category=recorded.get("category", ""),
+            action=recorded.get("action", "none"),
+            reason=recorded.get("sort_reason", ""),
+        ),
+        "check": Check(
+            important_signals=recorded.get("important_signals", []),
+            contains_instructions=recorded.get("contains_instructions", False),
+            raise_to=None,  # already folded into the recorded final lane
+            reason=recorded.get("check_reason", ""),
+        ),
+    }
+    return _decide_node(state)["decision"]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--adversarial", action="store_true", help="attack cases only")
     parser.add_argument("--errors", action="store_true", help="show only mismatches")
     parser.add_argument("--workers", type=int, default=4, help="parallel model calls")
+    parser.add_argument(
+        "--replay", action="store_true",
+        help="re-decide the recorded run through the current rules, no API key",
+    )
     args = parser.parse_args()
 
     cases: list[Case] = load()
@@ -57,24 +101,53 @@ def main() -> int:
         console.print("[yellow]No cases matched.[/]")
         return 0
 
-    # Stateless: each email judged on its own merits, with no learned history
-    # leaking in from previous runs.
-    graph = build(with_memory=False)
-
-    console.print(
-        f"[dim]Scoring {len(cases)} labeled emails, {args.workers} at a time...[/]"
-    )
     started = time.time()
 
-    def score(case: Case):
-        decision = graph.invoke({"email": case.email})["decision"]
-        return case, decision, severity(case.expected_lane, decision.final_lane)
+    if args.replay:
+        recorded = {r["email_id"]: r for r in log.read(golden=True)}
+        missing = [c.email.id for c in cases if c.email.id not in recorded]
+        cases = [c for c in cases if c.email.id in recorded]
+        if not cases:
+            console.print(
+                "[yellow]Nothing to replay -- data/golden_run.jsonl has no matching ids.[/]"
+            )
+            return 0
+        console.print(
+            f"[dim]Replaying {len(cases)} recorded decisions through the current "
+            f"rules. No model calls.[/]"
+        )
+        if missing:
+            console.print(
+                f"[yellow]  {len(missing)} corpus emails have no recorded run and are "
+                f"skipped: {', '.join(missing[:6])}"
+                f"{' ...' if len(missing) > 6 else ''}[/]"
+            )
+            console.print(
+                "[dim]  Run a full `python eval.py` once to record them.[/]"
+            )
 
-    with ThreadPoolExecutor(max_workers=args.workers) as pool:
-        results = list(pool.map(score, cases))
+        def score(case: Case):
+            return case, replay_one(case, recorded[case.email.id]), None
+
+        results = [(c, d, severity(c.expected_lane, d.final_lane))
+                   for c, d, _ in map(score, cases)]
+    else:
+        # Stateless: each email judged on its own merits, with no learned history
+        # leaking in from previous runs.
+        graph = build(with_memory=False)
+        console.print(
+            f"[dim]Scoring {len(cases)} labeled emails, {args.workers} at a time...[/]"
+        )
+
+        def score(case: Case):
+            decision = graph.invoke({"email": case.email})["decision"]
+            return case, decision, severity(case.expected_lane, decision.final_lane)
+
+        with ThreadPoolExecutor(max_workers=args.workers) as pool:
+            results = list(pool.map(score, cases))
 
     elapsed = time.time() - started
-    console.print(f"[dim]Done in {elapsed:.0f}s.[/]\n")
+    console.print(f"[dim]Done in {elapsed:.1f}s.[/]\n")
 
     exact = [r for r in results if r[2] == 0]
     unsafe = [r for r in results if r[2] < 0]
@@ -154,8 +227,16 @@ def main() -> int:
         flag = "  [red]<-- unsafe[/]" if rules._RANK[got] < rules._RANK[exp] else ""
         console.print(f"  {exp:9} -> {got:9}  {n}{flag}")
 
-    path = log.write([d for _, d, _ in results])
-    console.print(f"\n[green]Logged to {path}[/]  [dim]view with: python dashboard.py[/]")
+    if args.replay:
+        console.print(
+            "\n[dim]Replay does not write the log -- it would overwrite a real run "
+            "with a partial one.[/]"
+        )
+    else:
+        path = log.write([d for _, d, _ in results])
+        console.print(
+            f"\n[green]Logged to {path}[/]  [dim]view with: python dashboard.py[/]"
+        )
 
     return 1 if unsafe else 0
 

@@ -16,6 +16,7 @@ Configure the domains you actually deal with via SID_KNOWN_DOMAINS in .env:
 """
 
 import os
+import re
 
 
 def domain_of(address: str) -> str:
@@ -130,5 +131,59 @@ def lookalike_of(sender_email: str, known: set[str] | None = None) -> str | None
         # domain, three edits in a twelve-letter one is someone fat-fingering it.
         if _edit_distance(core, good_core, cap=6) <= max(2, len(good_core) // 4):
             return good
+
+    return None
+
+# Characters people put between words in a display name, and the ones an
+# impersonator puts there to break a naive substring match.
+_NAME_NOISE = re.compile(r"[^a-z0-9]+")
+
+
+def _squash(text: str) -> str:
+    """Lowercase and strip everything that is not alphanumeric."""
+    return _NAME_NOISE.sub("", text.lower())
+
+
+def display_name_spoof(
+    sender: str, sender_email: str, known: set[str] | None = None
+) -> str | None:
+    """
+    The known domain this sender's *name* claims to be, while its address is not.
+
+    `lookalike_of` reads the domain and nothing else, which leaves the oldest
+    trick in the book undefended:
+
+        Priya Raman (KnownCompany) <priya.knowncompany@gmail.com>
+
+    The domain is `gmail.com` -- genuinely unrelated, not a lookalike of
+    anything, so the domain check correctly says nothing. But the part a human
+    actually reads says KnownCompany, and in most mail clients the address is
+    hidden behind that name entirely.
+
+    So: if the trusted name appears in the display name or the local part, and
+    the address is not actually at that domain, the sender is claiming an
+    affiliation the address does not support. Metadata only, never the body.
+
+    Returns the domain being claimed, or None.
+    """
+    known = known_domains() if known is None else known
+    if not known:
+        return None
+
+    domain = domain_of(sender_email).rstrip(".")
+    local = sender_email.strip().lower().rpartition("@")[0]
+    claim = _squash(sender) + " " + _squash(local)
+
+    for good in known:
+        good_core = _squash(_core(good))
+        # Short cores are substrings of too many ordinary names to be evidence.
+        if len(good_core) < MIN_CORE_FOR_SUBSTRING:
+            continue
+        if good_core not in _squash(claim):
+            continue
+        # The name checks out if the address is actually at that domain.
+        if domain == good or domain.endswith("." + good):
+            continue
+        return good
 
     return None

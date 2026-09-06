@@ -103,6 +103,15 @@ def _decide_node(state: State) -> State:
     if impersonating:
         raise_to("ESCALATE", f"sender domain imitates '{impersonating}'")
 
+    # The friendly name is the part a human actually reads -- most mail clients
+    # hide the address behind it entirely. A name claiming an affiliation the
+    # address does not support is impersonation even when the domain itself is
+    # perfectly ordinary, which is why the check above cannot catch it:
+    # gmail.com is not a lookalike of anything.
+    claimed = domains.display_name_spoof(email.sender, email.sender_email)
+    if claimed and claimed != impersonating:
+        raise_to("ESCALATE", f"display name claims '{claimed}', address does not")
+
     # Mechanical, not a hazard: the model picked a lane its own proposed action
     # is not allowed in. The floor corrects it, and that correction is no
     # evidence about the email's contents.
@@ -123,12 +132,6 @@ def _decide_node(state: State) -> State:
     if lane == "SILENT" and check.important_signals:
         raise_to("ASK", f"looks routine but mentions: {', '.join(check.important_signals[:3])}")
 
-    # Recorded whether or not it moved the lane. The raise above only fires out
-    # of SILENT, so an ASK email marked "payment due" produces no raise at all --
-    # and used to be freely promotable to NOTIFY, trust quietly downgrading the
-    # very thing the check flagged as having money at stake.
-    if check.important_signals:
-        hazards.append(f"stakes: {', '.join(check.important_signals[:3])}")
 
     action = sort.action if rules.is_allowed(lane, sort.action) else "none"
 
@@ -176,12 +179,27 @@ def _calibrate_node(state: State, config: RunnableConfig, *, store: BaseStore) -
     # `decide` without tripping a single rule has an empty `raises` list.
     # Hazards block the ledger; mechanical floor corrections do not.
     #
-    # The first cut of this blocked on `bool(d.raises)`, which was too blunt:
-    # "'schedule' is not permitted in NOTIFY" is the most common raise in the
-    # corpus and it froze calibration outright, taking the measured fall in ask
-    # rate to zero. `masked` and `contains_instructions` stay named explicitly
-    # because they must block even if a future edit forgets to record them.
-    blocked = bool(d.masked) or d.contains_instructions or bool(d.hazards)
+    # The first cut blocked on `bool(d.raises)`, which was too blunt: "'schedule'
+    # is not permitted in NOTIFY" is the most common raise in the corpus and it
+    # froze calibration outright. `masked` and `contains_instructions` stay named
+    # explicitly because they must block even if a future edit forgets to record
+    # them as hazards.
+    #
+    # Stake signals are the one conditional case, and the condition is whether
+    # anything can actually happen. Promotion never changes *what* is done -- it
+    # only changes how loudly the user is told -- so when the proposed action is
+    # already `none`, promoting ASK -> NOTIFY moves an email from "ask me about
+    # this" to "tell me about this" and executes nothing either way. Refusing to
+    # learn there means a user can decline the same thing twenty times and still
+    # be asked a twenty-first, which is the exact behaviour calibration exists to
+    # fix. When an action *would* execute, stakes block it.
+    acts = d.action != "none"
+    blocked = (
+        bool(d.masked)
+        or d.contains_instructions
+        or bool(d.hazards)
+        or (bool(d.important_signals) and acts)
+    )
 
     earned, why = memory.earned_lane(
         store, user_id, d.sender_email, d.action, d.final_lane, blocked=blocked

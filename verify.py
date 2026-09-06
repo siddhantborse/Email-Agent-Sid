@@ -10,6 +10,7 @@ how manipulated the AI's suggestion was.
   python verify.py
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -46,11 +47,13 @@ def decide(
     raise_to=None,
     instructions=False,
     signals=None,
+    sender="",
+    sender_email="someone@example.com",
 ):
     """Run just the decide step with a made-up AI suggestion."""
     state = {
         "email": Email(
-            id="t", sender_email="someone@example.com", subject="s",
+            id="t", sender=sender, sender_email=sender_email, subject="s",
             body="b", masked=masked or [],
         ),
         "sort": Sort(lane=lane, category="test", action=action, reason="test"),
@@ -270,6 +273,43 @@ for addr, want, why in [
     got = lookalike_of(addr, KNOWN) is not None
     check(f"{'caught' if want else 'allowed'}: {why}", got == want, f"{addr} -> {got}")
 
+# Display-name spoofing. `lookalike_of` reads the address only, so a name that
+# claims an affiliation its address does not support -- the oldest trick there
+# is, and the one most mail clients help by hiding the address -- was undefended
+# until this landed.
+from sid_agent.domains import display_name_spoof  # noqa: E402
+
+for name, addr, want, why in [
+    ("Priya Raman (KnownCompany)", "priya.knowncompany@gmail.com", True,
+     "name claims the company, address is a free mailbox"),
+    ("KnownCompany Support", "support@mailer-svc.example", True,
+     "org name in the display name, unrelated domain"),
+    ("K-n-o-w-n-C-o-m-p-a-n-y", "x@evil.example", True,
+     "punctuation between letters does not hide the claim"),
+    ("billing", "knowncompany.billing@outlook.example", True,
+     "the claim is in the local part rather than the name"),
+    ("Priya Raman", "priya@knowncompany.example", False,
+     "a real colleague at the real domain"),
+    ("Priya (KnownCompany)", "priya@mail.knowncompany.example", False,
+     "a real subdomain still supports the claim"),
+    ("Weekly Digest", "news@techroundup.example", False,
+     "an ordinary unrelated sender"),
+    ("", "vendor@supplier.example", False, "no display name at all"),
+]:
+    got = display_name_spoof(name, addr, KNOWN) is not None
+    check(f"{'caught' if want else 'allowed'}: {why}", got == want, f"{name!r} <{addr}>")
+
+# The end-to-end path reads the configured trust list from the environment,
+# so set it here rather than depending on whatever .env happens to hold.
+os.environ["SID_KNOWN_DOMAINS"] = "knowncompany.example"
+d = decide(lane="SILENT", action="archive",
+           sender="KnownCompany Billing", sender_email="billing@unrelated.example")
+check(
+    "a display-name spoof escalates end to end",
+    d.final_lane == "ESCALATE" and d.action == "none",
+    f"{d.final_lane}/{d.action}",
+)
+
 print("\n--- calibration: learning is bounded by the rules table ---")
 
 from langgraph.store.memory import InMemoryStore  # noqa: E402
@@ -341,28 +381,60 @@ check(
 # while the seam between them leaked: `blocked` did not account for a lane that
 # `decide` had raised, so a farmed streak could undo a lookalike-domain or
 # never-list escalation. Compose them and check the whole thing.
+#
+# Note what is asserted. Not "the ledger never relaxes a lane" -- it is allowed
+# to, that is the entire feature. The contract is that a relaxation can never
+# make something *happen* that would not have happened anyway:
+#
+#   - never below the action's floor, never into SILENT, never out of ESCALATE
+#   - never when the decision carried a hazard
+#   - never when an action would execute and the check flagged stakes
+#   - and the surviving action must still be permitted by the lane it lands in
+#
+# A promotion to NOTIFY on a decision whose action is already `none` executes
+# nothing; it changes "ask me" to "tell me", which is what calibration is for.
 composed = []
 for lane_in in rules.LANES:
     for action in sorted(memory.PROMOTABLE):
         for kwargs in (
             {"action": "send_money"},
             {"action": "not_a_real_action"},
+            {"action": action},
             {"masked": ["otp"]},
             {"instructions": True},
             {"raise_to": "ESCALATE"},
             {"signals": ["payment due"]},
+            {"action": action, "signals": ["payment due"]},
         ):
             d = decide(lane=lane_in, **kwargs)
             st = store_with(d.action, ["accepted"] * 100)
-            earned, _ = memory.earned_lane(
-                st, "u", "someone@example.com", d.action, d.final_lane,
-                blocked=bool(d.masked) or d.contains_instructions or bool(d.hazards),
+            hazardous = (
+                bool(d.masked) or d.contains_instructions or bool(d.hazards)
+                or (bool(d.important_signals) and d.action != "none")
             )
-            if rules._RANK[earned] < rules._RANK[d.final_lane]:
-                composed.append((lane_in, action, kwargs, d.final_lane, earned))
+            earned, _ = memory.earned_lane(
+                st, "u", "someone@example.com", d.action, d.final_lane, blocked=hazardous,
+            )
+            if rules._RANK[earned] >= rules._RANK[d.final_lane]:
+                continue  # not relaxed at all
+            why = None
+            if rules._RANK[earned] < rules._RANK[rules.min_lane_for(d.action)]:
+                why = "below the floor"
+            elif earned == "SILENT":
+                why = "into SILENT"
+            elif d.final_lane == "ESCALATE":
+                why = "out of ESCALATE"
+            elif hazardous:
+                why = "despite a hazard"
+            elif not rules.is_allowed(earned, d.action):
+                why = "lane does not permit the action"
+            elif d.action != "none":
+                why = "an action would execute"
+            if why:
+                composed.append((lane_in, kwargs, d.final_lane, earned, why))
 check(
-    f"decide -> calibrate composed: no raise can be undone by the ledger "
-    f"({len(rules.LANES) * len(memory.PROMOTABLE) * 6} combinations)",
+    f"decide -> calibrate composed: relaxation is never dangerous "
+    f"({len(rules.LANES) * len(memory.PROMOTABLE) * 8} combinations)",
     not composed,
     str(composed[:3]),
 )
