@@ -130,6 +130,13 @@ Set `SID_MODEL` in `.env` to whichever you use, plus `SID_USER_NAME` and
 
 ## Run it
 
+**Run everything that needs no API key** — all five offline harnesses, a couple
+of seconds, non-zero exit if any fails:
+
+```bash
+python check.py
+```
+
 **Prove the safety layer holds.** No API key, no network, no model:
 
 ```bash
@@ -287,6 +294,7 @@ Add your own — everything picks them up automatically. Growing this corpus
 | [`docs/TRANSCRIPTS.md`](docs/TRANSCRIPTS.md) | four worked examples, one per lane, committed output |
 | [`langsmith_eval.py`](langsmith_eval.py) | the same, as a traced LangSmith experiment |
 | [`hitl.py`](hitl.py) | the human-in-the-loop lane and the calibration demo |
+| [`check.py`](check.py) | runs every offline harness in one command |
 | [`verify.py`](verify.py) | proves the safety properties, no API key needed |
 | [`examples.py`](examples.py) | four worked examples, one per lane |
 | [`dashboard.py`](dashboard.py) | the run dashboard |
