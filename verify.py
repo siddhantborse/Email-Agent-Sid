@@ -79,6 +79,52 @@ check("ordinary numbers survive", "402" in masked_text and found == [], masked_t
 _, _, labels = prepare("Your code", "Your OTP is 1234")
 check("prepare() reports masking", labels == ["otp"], str(labels))
 
+# Regressions for shapes that used to slip through entirely. A miss here is
+# doubly bad: the model sees the secret AND the automatic masked -> ESCALATE
+# raise never fires, so the only remaining defence is the model choosing to be
+# careful -- which is exactly the dependency this layer exists to remove.
+_MUST_MASK = [
+    ("code on its own line", "Your code:\n839214\nExpires in 10 minutes."),
+    ("split across lines", "Your verification code is\n839214"),
+    ("PIN keyword", "Your PIN: 4821"),
+    ("MFA keyword", "MFA code 552130"),
+    ("longer than 8 digits", "Your verification code is 839214777"),
+    ("spaced digits", "Your access code is 8 3 9 2 1 4"),
+    ("dotted digits", "Your OTP: 8.3.9.2.1.4"),
+    ("zero-width in keyword", "Your verifica\u200btion code is 839214"),
+    ("fullwidth digits", "Your OTP is \uff18\uff13\uff19\uff12\uff11\uff14"),
+    ("card split by dots", "Card 4111.1111.1111.1111"),
+    ("password with dash", "password - hunter2xyz"),
+    ("pass phrase", "The pass phrase is correct-horse"),
+    ("credentials", "credentials: admin/hunter2"),
+    ("AWS access key", "Use AKIAIOSFODNN7EXAMPLE to connect"),
+    ("Google API key", "key AIzaSyD-1234567890abcdefghijklmnopqrstu here"),
+    ("JWT", "token eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NX0.dBjftJeZ4CVPmB92K"),
+    ("api_key = value", "api_key = ab12cd34ef56gh78ij90kl"),
+    ("US SSN", "SSN 123-45-6789"),
+    ("IBAN", "IBAN GB82 WEST 1234 5698 7654 32"),
+]
+missed = [name for name, body in _MUST_MASK if not prepare("s", body)[2]]
+check(f"all {len(_MUST_MASK)} sensitive shapes are masked", not missed, str(missed))
+
+# Over-masking is not free: masked content forces an ESCALATE, so a false
+# positive here is an email the user has to look at for no reason.
+_MUST_NOT_MASK = [
+    ("code review", "Please finish the code review by Friday."),
+    ("bug number", "Bug 12345 is still open in the codebase."),
+    ("codeword", "We agreed the codeword is swordfish."),
+    ("invoice number", "Invoice 4471 is due on the 14th."),
+    ("times and years", "The 2026 planning doc is ready, meeting at 1400."),
+    ("phone number", "Call me on 555 0134 if urgent."),
+    ("ordinary mail", "Can we move our 1:1 to Friday at 2pm?"),
+]
+false_pos = [f"{n}:{prepare('s', b)[2]}" for n, b in _MUST_NOT_MASK if prepare("s", b)[2]]
+check(f"none of {len(_MUST_NOT_MASK)} ordinary emails are over-masked", not false_pos, str(false_pos))
+
+# The value must never survive, only the label.
+_body = "Your verification code is 839214"
+check("the secret value itself is gone", "839214" not in prepare("s", _body)[1])
+
 
 print("\n--- lane ordering (the guarantee that we never relax) ---")
 
