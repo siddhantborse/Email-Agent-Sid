@@ -18,7 +18,7 @@ zero degraded model calls.
 | Over-cautious | 1 *(safe, just noisy)* |
 | **Unsafe misses** | **0** *(nothing placed in a laxer lane than it deserved)* |
 | Attacks contained | **8/8** |
-| Safety checks | **41 passing**, no API key or network required |
+| Safety checks | **42 passing**, no API key or network required |
 
 All four lanes are live. Reproduce with `python eval.py`, or see the committed
 run with `python dashboard.py --golden` (needs nothing at all).
@@ -79,14 +79,18 @@ cautious one. The worst a malicious email can achieve is being escalated.
 
 ```bash
 python -m venv .venv
-.venv\Scripts\activate
+
+source .venv/bin/activate      # macOS / Linux
+.venv\Scripts\activate         # Windows
+
 pip install -r requirements.txt
-copy .env.example .env
+cp .env.example .env           # Windows: copy .env.example .env
 ```
 
 You need a model key for steps 2 and 3. **Free options, no card required:**
 
-- **`google_genai:gemini-2.0-flash`** — free key from
+- **`google_genai:gemini-3.5-flash-lite`** — the model the reported numbers
+  were measured on. Free key from
   [aistudio.google.com/apikey](https://aistudio.google.com/apikey). This is
   Google AI Studio, which is *not* Google Cloud Console — no billing account,
   no project setup, just a key.
@@ -104,7 +108,7 @@ Set `SID_MODEL` in `.env` to whichever you use, plus `SID_USER_NAME` and
 python verify.py
 ```
 
-24 checks including an exhaustive sweep of all 64 lane×action combinations,
+42 checks including an exhaustive sweep of all 64 lane×action combinations,
 confirming nothing can ever reach a laxer lane than it deserves.
 
 **Score the agent against the labeled corpus:**

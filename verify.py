@@ -22,10 +22,13 @@ from sid_agent.schemas import Check, Email, Sort  # noqa: E402
 
 PASS, FAIL = "  PASS", "  FAIL"
 failures = 0
+total = 0
 
 
 def check(name: str, condition: bool, detail: str = "") -> None:
-    global failures
+    """Record one assertion. Counted, so the suite can report its own size."""
+    global failures, total
+    total += 1
     if condition:
         print(f"{PASS}  {name}")
     else:
@@ -268,6 +271,9 @@ check("never-list actions stay at ESCALATE forever", never_moved is None, str(ne
 
 print()
 if failures:
-    print(f"{failures} check(s) failed.\n")
+    print(f"{failures} of {total} check(s) failed.\n")
     raise SystemExit(1)
-print("All checks passed. The safety layer holds regardless of what the AI says.\n")
+print(
+    f"All {total} checks passed. "
+    "The safety layer holds regardless of what the AI says.\n"
+)
