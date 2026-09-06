@@ -41,8 +41,10 @@ which needs no key. To score them:
 python eval.py          # when quota allows; warns loudly if any call failed
 ```
 
-Design decisions and the bugs the harnesses caught: **[DESIGN.md](DESIGN.md)**.
-Worked examples: **[docs/TRANSCRIPTS.md](docs/TRANSCRIPTS.md)**.
+Key decisions: **[DESIGN.md](DESIGN.md)**. Every bug the harnesses caught, with
+the numbers that exposed them — including two occasions a fix made things worse:
+**[docs/FINDINGS.md](docs/FINDINGS.md)**. Worked examples:
+**[docs/TRANSCRIPTS.md](docs/TRANSCRIPTS.md)**.
 
 ## The four lanes
 
@@ -274,7 +276,8 @@ Add your own — everything picks them up automatically. Growing this corpus
 | [`src/sid_agent/graph.py`](src/sid_agent/graph.py) | the LangGraph graph + the deterministic `decide` step |
 | [`src/sid_agent/memory.py`](src/sid_agent/memory.py) | the calibration ledger, persisted across runs |
 | [`src/sid_agent/domains.py`](src/sid_agent/domains.py) | lookalike sender detection, deterministic |
-| [`DESIGN.md`](DESIGN.md) | key decisions, and the bugs the harness caught |
+| [`DESIGN.md`](DESIGN.md) | key decisions, short |
+| [`docs/FINDINGS.md`](docs/FINDINGS.md) | every bug the harnesses caught, with numbers |
 | [`data/emails.json`](data/emails.json) | the labeled corpus |
 | [`src/sid_agent/situations.py`](src/sid_agent/situations.py) | the proactive path. no model call anywhere in it |
 | [`eval.py`](eval.py) | scores the agent, separates unsafe from merely noisy |

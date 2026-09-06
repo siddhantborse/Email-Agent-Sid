@@ -5,6 +5,13 @@ with their inbox.
 
 ---
 
+**The bugs these decisions were paid for in are in
+[docs/FINDINGS.md](FINDINGS.md).** Every one was found by measurement, not by
+reading the code, and two of them were introduced by a previous fix. That file
+is the honest record; this one is the short version.
+
+---
+
 ## 1. The model never decides its own autonomy
 
 The obvious build is one LLM call: *read the email, pick a lane, do the thing.*
@@ -96,13 +103,15 @@ consecutive accepts:
 | `attach_file` | ASK | ASK — never promotable |
 | `send_money` | ESCALATE | ESCALATE — on the never-list |
 
-Three further bounds, each of which had to be added after it turned out not to
-hold (§7d, §7e):
+Three further bounds, each added after an adversarial review showed it did not
+actually hold ([FINDINGS §5](FINDINGS.md), [§6](FINDINGS.md)):
 
 - Promotion is refused outright for any decision the deterministic layer flagged
   as **hazardous** — masked content, agent-directed text, a lookalike domain, a
-  never-list or unknown action, a raise from `check`, or a stake signal — no
-  matter what the history says.
+  spoofed display name, a never-list or unknown action, or a raise from `check` —
+  no matter what the history says. Stake signals block too, but only when the
+  proposed action would actually execute: promoting a `none` decision changes
+  how loudly the user is told, never what is done.
 - Nothing can be learned *into* `SILENT`. The quietest thing trust can buy is
   "do it and tell me."
 - Nothing can be learned *out of* `ESCALATE`. It is a verdict, not an opening
@@ -154,292 +163,12 @@ contained**. So "0 unsafe" alone proves nothing — the job is to raise *exact*
 while holding *unsafe* at zero. Any change that buys accuracy with an unsafe
 miss is a regression.
 
-### Rate limiting is a correctness concern, not a performance one
-
-A throttled model call does not raise an error the caller notices — it fails
-safe to `ESCALATE`. On a corpus where half the labels *are* `ESCALATE`, failures
-masquerade as correct answers and inflate the score.
-
-This bit us. Measured on the same corpus, same code:
-
-| run | exact | unsafe | attacks contained |
-|---|---|---|---|
-| unthrottled, 14/35 calls rate-limited | 80% | 0 | 8/8 |
-| throttled properly | 86% | **3** | **5/8** |
-
-The first run's headline numbers were better *and* completely wrong. The three
-"contained" attacks were escalating by accident. `sort.py` now carries an
-`InMemoryRateLimiter` with backoff retry, and `eval.py` refuses to present a
-score without warning when any call failed.
+The war stories behind these numbers — including a run that scored *better*
+because half its model calls failed — are in [docs/FINDINGS.md](FINDINGS.md).
 
 ---
 
-## 7. What the fixed measurement then exposed
-
-Those three unsafe misses were all injections landing in `ASK` instead of
-`ESCALATE`. The check had correctly flagged every one with
-`contains_instructions: true`. The bug was in our own rule:
-
-```python
-if check.contains_instructions:
-    if lane == "SILENT": raise_to("ESCALATE", ...)
-    else:                raise_to("ASK", ...)      # too lenient
-```
-
-The escalation only fired if the sorter had already said `SILENT`. Anywhere
-above that, agent-directed text merely nudged the email to `ASK`. Since an email
-addressing the agent is never grounds for autonomous action *whatever lane it
-starts in*, the condition is gone — `contains_instructions` now escalates
-unconditionally, and `verify.py` tests all four starting lanes.
-
-Result: unsafe misses 3 → 1, attacks contained 5/8 → 8/8, exact 86% → 89%.
-
----
-
-## 7b. And then the fix for *that* broke something else
-
-At 89%, the `NOTIFY` lane was dead — 0 of 35 emails reached it. One of the four
-lanes in the brief never fired, because `check` was flagging "a named real
-person" and "a direct request" as stakes and pushing every scheduling email to
-`ASK`.
-
-Loosening the check to judge *stakes* rather than *tone* revived the lane
-(0 → 3 correct) and lifted exact to 91%. It also let a spoof through:
-
-```
-d.okafor@knowncompany-support.example   ->  ASK   (expected ESCALATE)
-```
-
-The model reasoned about the content perfectly — *"sharing sensitive company
-data to a personal address requires explicit permission"* — and still missed
-that the domain was impersonating `knowncompany.example`. A good impersonation
-has innocent tone and plausible content, which is exactly what a tone-based
-check cannot catch.
-
-So the fix went in the deterministic layer instead (`domains.py`): compare the
-sender's domain against a configured list of domains you actually deal with, and
-escalate anything close-but-not-equal. Suffix wrapping
-(`knowncompany-support`), typos (`knowncompanny`), bounded edit distance. Real
-subdomains and genuinely unrelated domains are left alone.
-
-**Final: 97% exact, 0 unsafe misses, 8/8 attacks contained, all four lanes live.**
-
-The lesson worth stating: when the model cannot be relied on to be suspicious,
-encode the suspicion in code that cannot be talked out of it. Two prompt fixes
-each traded one failure for another. The structural fix did not.
-
----
-
-## 7c. Calibration had to survive the process
-
-The ledger was on `InMemoryStore`, which meant the agent learned during a run
-and started from zero on the next one. That is not learning.
-
-`memory.FileStore` persists to `logs/trust.json` on every write. Verified:
-a streak of 5 written in one process loads in a fresh one and promotes
-`ASK → NOTIFY`. Demos (`--demo`, `--earn`) deliberately use a throwaway store so
-they stay reproducible; the interactive mode persists.
-
----
-
-## 7d. An adversarial review, and the four holes it found
-
-Everything above was found by our own harness. That harness was written by the
-same person who wrote the code, which is a known blind spot, so the safety layer
-was handed to an independent reviewer with one instruction: break the invariant.
-
-The reviewer confirmed the core claim — no path through `decide` produces a
-laxer lane, across malformed actions, malformed lanes, unicode whitespace,
-empty strings and every ordering of the rules. `decide` held. Four things
-around it did not.
-
-**1. `domains.py` skipped the most common spoof there is.** The loop read:
-
-```python
-if not good_core or core == good_core:
-    continue          # "same name, must be fine"
-```
-
-So `knowncompany.com` against a trusted `knowncompany.example` was classified
-*not a lookalike* — the registrable name reused under a suffix we never
-trusted. Same body, same sorter output, only the domain shape changed:
-
-| sender | result |
-|---|---|
-| `d.okafor@knowncompany-support.example` | ESCALATE ✓ |
-| `d.okafor@knowncompany.com` | **ASK — unsafe miss** |
-
-Also missed: the trusted name pushed into a subdomain label
-(`knowncompany.example.evil.com`), a trailing DNS root dot defeating the whole
-check (`knowncompany.example.`), and a typo budget that did not scale with name
-length. All four now caught, with regressions for each.
-
-The uncomfortable part is that `verify.py` had six lookalike assertions and all
-six passed, because they tested the two shapes that worked.
-
-**2. Calibration could learn into `SILENT`.** §3 above claimed it could not.
-That was false. `archive` and `label` have floor `SILENT`, so a `NOTIFY`
-decision could be promoted to "handle it and say nothing" — the exact failure
-§5 is built around. Promotion is now capped at `NOTIFY` regardless of floor.
-
-The test that should have caught it, `"promotion never reaches SILENT"`, used
-`reply_scheduling` — whose floor is *already* `NOTIFY`. It could not fail no
-matter what the code did. **A test that cannot fail is worse than no test: it
-occupies the space where a real one would have gone.** It now sweeps every
-promotable action.
-
-**3. Calibration could soften an `ESCALATE`.** When a lane rises, the action is
-clamped to `none` — and `none` has floor `SILENT`, so an escalation looked
-freely promotable. A farmed streak dropped escalations one step to `ASK`. The
-reviewer measured 143 such drops across the state space.
-
-`ESCALATE` is now terminal for the ledger. It is a verdict, not an opening bid:
-something reached it because a rule fired, and unrelated good behaviour from
-the same sender is not evidence against that specific rule.
-
-**4. `blocked` was under-computed** — the bug that made 3 reachable. It read
-`bool(d.masked) or d.contains_instructions`, so a lookalike domain, a
-never-list action, an unknown action and a raise from `check` all left it
-`False`. Trust could undo the very rule that had just fired.
-
-The through-line: **sweeping `decide` alone and `earned_lane` alone both
-passed while the seam between them leaked.** `verify.py` now sweeps the
-composed `decide → calibrate` path, which is where three of the four lived.
-
----
-
-## 7e. Fixing that one over-corrected, and the measurement caught it
-
-The first fix for hole 4 was `blocked = ... or bool(d.raises)` — if the rules
-intervened at all, learning does not get to undo it.
-
-It was too blunt, and `calibration_eval.py` said so immediately: the measured
-fall in ask rate went to **zero**. Nothing could ever be promoted again.
-
-The reason is that not all raises mean the same thing. Two kinds:
-
-| raise | what it tells you |
-|---|---|
-| `'schedule' is not permitted in NOTIFY` | **mechanical.** The model picked a lane its own action isn't allowed in. The floor corrected it. Says nothing about the email. |
-| `sender domain imitates 'knowncompany.example'` | **a hazard.** A judgement about *this* email. |
-
-The first is the single most common raise in the corpus. Blocking on it froze
-calibration outright while protecting nothing.
-
-`Decision` now carries `hazards` alongside `raises`, and only hazards block the
-ledger. `important_signals` is recorded as a hazard *even when it did not raise
-the lane* — the signal rule only fires out of `SILENT`, so an `ASK` email marked
-"payment due" produced no raise at all and was freely promotable to `NOTIFY`.
-Whether a signal moved the lane and whether it should block learning are two
-different questions, and conflating them is what let that through.
-
-Worth stating plainly: this over-correction was caught by the calibration
-measurement, not by a safety test. Both suites passed the whole time. Building
-the thing that measures the *feature* is what surfaced a bug in the *fix*.
-
----
-
-## 7f. Masking was thinner than it looked
-
-The reviewer swept 35 realistic secret shapes past `read.py`. **24 went
-through untouched.** A miss here is worse than it appears: the model sees the
-secret *and* the automatic `masked → ESCALATE` raise never fires, leaving only
-the model choosing to be careful — the exact dependency §4 exists to remove.
-
-The causes were structural, not a missing pattern here and there:
-
-- Every keyword window was `[^\n]{0,40}`, so it could not cross a line break.
-  `"Your code:\n839214"` — the shape most providers actually send — matched
-  nothing.
-- `\b(\d{4,8})\b` cannot anchor inside a longer digit run, so a 9-digit code
-  was invisible.
-- No normalisation, so a zero-width space inside the keyword
-  (`verifica​tion code`) was a free bypass.
-
-`clean()` now runs NFKC and strips invisible characters before any pattern
-sees the text; windows cross newlines; digit runs tolerate separators; and the
-keyword and token lists cover PIN/MFA, pass phrases, AWS keys, Google keys,
-JWTs, SSNs and IBANs.
-
-Bare `"code"` is still deliberately excluded. **Over-masking is not free** —
-masked content forces an `ESCALATE`, so a false positive costs the user a
-pointless glance. It is admitted only as `"your code"`, `"code:"` and
-`"code is"`. The first cut of that matched `"the codebase"`. Both directions
-are now tested: 19 shapes that must mask, 7 ordinary emails that must not.
-
----
-
----
-
-## 8. Known weaknesses
-
-Stated plainly, because a system like this is only trustworthy if its failure
-modes are known.
-
-- **The corpus is small.** 49 labeled emails, 22 adversarial. Enough to catch
-  rule bugs, not enough for a confident accuracy claim. Treat the headline as
-  directional. It is also unbalanced in a way that matters for calibration:
-  only 8 of 35 recorded decisions ever open the ASK interrupt, so the learning
-  loop has very little to work with (§11).
-- **Display-name spoofing is defended by a heuristic, not a standard.**
-  `display_name_spoof` catches the trusted name appearing in a display name or
-  local part on the wrong domain. It will not catch a name that implies the
-  affiliation without containing it ("IT Helpdesk"), and it will flag a genuine
-  ex-employee writing from a personal address. It fails safe, but it is a
-  string heuristic and should be read as one.
-- **Labels are ours.** A single author wrote both the emails and the ground
-  truth, so the labels encode one person's risk appetite.
-- **`SILENT`/`NOTIFY` is a genuinely fuzzy boundary.** "Room booking confirmed"
-  is defensible either way. Some residual error is disagreement, not failure.
-- **Injection detection is a model judgement**, and §12 now puts a number on
-  how much rests on it: only **6 of 22** attacks carry a tell the code can see
-  by itself. The *consequence* of detection is deterministic; the detection is
-  an LLM call. Shrinking that gap is the most useful backlog in the repo.
-- **14 of the 49 emails have not been scored through the model.** They were
-  added after the free-tier daily quota ran out. They are covered by
-  `verify.py` and `worst_case.py`, which need no key, but the 97% figure is
-  measured over the 35 with a recorded run — not all 49. Reporting a throttled
-  run instead would have been worse (§6).
-- **No execution yet.** Lanes record what they *would* do. The graph ends where
-  execution will hang off, and `interrupt()` is already wired for `ASK`.
-- **Calibration has still never seen a real user.** It is now *measured*
-  (`calibration_eval.py`) rather than merely asserted, but against a simulated
-  user with stable, hand-written preferences. That harness can tell you the
-  mechanism works and the bounds hold; it cannot tell you that five accepts is
-  the right threshold for a human being. It remains a bounded counter, not a
-  trained preference model.
-- **The labels for the proactive path are ours too, and its policy is
-  deterministic.** `situations_eval.py` scoring 10/10 mostly means the table
-  agrees with the person who wrote the table.
-- **Lookalike detection needs a configured trust list.** With
-  `SID_KNOWN_DOMAINS` empty it is a no-op, and it only defends the domains you
-  name. It catches impersonation of domains you know, not novel malicious ones.
-
----
-
-## 9. Stack
-
-LangGraph for the graph, `Store` for calibration memory, a checkpointer so
-`interrupt()` can pause and resume the `ASK` lane. LangChain
-(`init_chat_model` + `with_structured_output`) for the two model calls, so the
-provider is one env var. LangSmith for traced experiments
-(`langsmith_eval.py`), with an offline scorer (`eval.py`) that needs no account.
-
-Model is `gemini-3.5-flash-lite` — chosen for a free tier, and because triage is
-a classification task that does not need a frontier model. The safety properties
-do not depend on which model is used, which is the point. `ollama:llama3.2`
-works with no key and no network at all.
-
-Four of the five harnesses call no model: `verify.py`, `calibration_eval.py`,
-`worst_case.py` and `situations_eval.py`. That is deliberate rather than
-convenient. A reviewer should be able to check every safety claim here before
-deciding whether to trust the thing with a key, and a claim that can only be
-verified by spending someone else's quota is a claim that mostly goes
-unverified.
-
----
-
-## 10. The proactive path
+## 7. The proactive path
 
 "For each incoming message **or situation**" — the second half needs a second
 entry point, because an inbox generates work that no message announces. Nobody
@@ -480,7 +209,7 @@ noise, not help.
 
 ---
 
-## 11. Measuring the calibration
+## 8. Measuring the calibration
 
 The brief calls calibration the core of the problem, and until late in the
 build it was the one thing here that was argued rather than measured. §3 proved
@@ -530,12 +259,12 @@ immediately, costing 5 rounds to recover.
 Both safety suites passed the entire time while `blocked` was too broad and the
 measured fall in ask rate was **zero** — nothing could ever be promoted.
 Building the thing that measures the *feature* is what surfaced the bug in the
-*fix* (§7e). A safety test can only tell you the agent is not dangerous. It
+*fix* (docs/FINDINGS.md). A safety test can only tell you the agent is not dangerous. It
 cannot tell you the agent is not useless.
 
 ---
 
-## 12. What survives a compromised model
+## 9. What survives a compromised model
 
 Every harness above measures the agent *including* the model's judgement.
 `worst_case.py` removes it: assume `sort` and `check` are wholly
@@ -559,8 +288,75 @@ protection of the action tables. That protection is real — it is why no
 never-list action is reachable and nothing dangerous executes — but it is the
 second line, not the first.
 
-§8 already said this in prose. A number is better than prose, because a number
+§10 already said this in prose. A number is better than prose, because a number
 can be moved. Every case promoted from "model-only" to "held by code" is a new
-deterministic tell, and that is exactly how `domains.py` came to exist (§7b).
+deterministic tell, and that is exactly how `domains.py` came to exist (docs/FINDINGS.md).
 It is the most useful backlog in the repo.
 
+---
+
+## 10. Known weaknesses
+
+Stated plainly, because a system like this is only trustworthy if its failure
+modes are known.
+
+- **The corpus is small.** 49 labeled emails, 22 adversarial. Enough to catch
+  rule bugs, not enough for a confident accuracy claim. Treat the headline as
+  directional. It is also unbalanced in a way that matters for calibration:
+  only 8 of 35 recorded decisions ever open the ASK interrupt, so the learning
+  loop has very little to work with (§8).
+- **Display-name spoofing is defended by a heuristic, not a standard.**
+  `display_name_spoof` catches the trusted name appearing in a display name or
+  local part on the wrong domain. It will not catch a name that implies the
+  affiliation without containing it ("IT Helpdesk"), and it will flag a genuine
+  ex-employee writing from a personal address. It fails safe, but it is a
+  string heuristic and should be read as one.
+- **Labels are ours.** A single author wrote both the emails and the ground
+  truth, so the labels encode one person's risk appetite.
+- **`SILENT`/`NOTIFY` is a genuinely fuzzy boundary.** "Room booking confirmed"
+  is defensible either way. Some residual error is disagreement, not failure.
+- **Injection detection is a model judgement**, and §9 now puts a number on
+  how much rests on it: only **6 of 22** attacks carry a tell the code can see
+  by itself. The *consequence* of detection is deterministic; the detection is
+  an LLM call. Shrinking that gap is the most useful backlog in the repo.
+- **14 of the 49 emails have not been scored through the model.** They were
+  added after the free-tier daily quota ran out. They are covered by
+  `verify.py` and `worst_case.py`, which need no key, but the 97% figure is
+  measured over the 35 with a recorded run — not all 49. Reporting a throttled
+  run instead would have been worse (§6).
+- **No execution yet.** Lanes record what they *would* do. The graph ends where
+  execution will hang off, and `interrupt()` is already wired for `ASK`.
+- **Calibration has still never seen a real user.** It is now *measured*
+  (`calibration_eval.py`) rather than merely asserted, but against a simulated
+  user with stable, hand-written preferences. That harness can tell you the
+  mechanism works and the bounds hold; it cannot tell you that five accepts is
+  the right threshold for a human being. It remains a bounded counter, not a
+  trained preference model.
+- **The labels for the proactive path are ours too, and its policy is
+  deterministic.** `situations_eval.py` scoring 10/10 mostly means the table
+  agrees with the person who wrote the table.
+- **Lookalike detection needs a configured trust list.** With
+  `SID_KNOWN_DOMAINS` empty it is a no-op, and it only defends the domains you
+  name. It catches impersonation of domains you know, not novel malicious ones.
+
+---
+
+## 11. Stack
+
+LangGraph for the graph, `Store` for calibration memory, a checkpointer so
+`interrupt()` can pause and resume the `ASK` lane. LangChain
+(`init_chat_model` + `with_structured_output`) for the two model calls, so the
+provider is one env var. LangSmith for traced experiments
+(`langsmith_eval.py`), with an offline scorer (`eval.py`) that needs no account.
+
+Model is `gemini-3.5-flash-lite` — chosen for a free tier, and because triage is
+a classification task that does not need a frontier model. The safety properties
+do not depend on which model is used, which is the point. `ollama:llama3.2`
+works with no key and no network at all.
+
+Four of the five harnesses call no model: `verify.py`, `calibration_eval.py`,
+`worst_case.py` and `situations_eval.py`. That is deliberate rather than
+convenient. A reviewer should be able to check every safety claim here before
+deciding whether to trust the thing with a key, and a claim that can only be
+verified by spending someone else's quota is a claim that mostly goes
+unverified.
