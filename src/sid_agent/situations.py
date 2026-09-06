@@ -173,6 +173,7 @@ def decide_situation(
         category=situation.kind,
         action=final_action,
         proposed_lane=proposed,
+        proposed_action=action,
         final_lane=lane,
         raises=raises,
         hazards=hazards,

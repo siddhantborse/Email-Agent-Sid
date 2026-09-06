@@ -57,26 +57,29 @@ def replay_one(case: Case, recorded: dict) -> "Decision":
     """
     Re-decide one email from its recorded model output.
 
-    The recorded `action` is the *final* action, after `decide` may have clamped
-    it to "none". So a replay cannot recover what the model originally proposed
-    on rows that were clamped, and for those it re-decides from the clamped
-    action instead. That is conservative in the right direction -- "none" is
-    permitted everywhere, so replay can only ever be *less* likely to raise a
-    lane than the original run was. A replay that still escalates is a real
-    escalation.
+    Only meaningful if the record kept `proposed_action` -- what the model
+    proposed *before* the lane clamped it. Records that kept only the final
+    action cannot be replayed: a clamped decision stores "none", "none" is
+    permitted in every lane, so no rule can fire and the replay reproduces the
+    recording whatever the rules now say. That is not a weak measurement, it is
+    a fake one, so `--replay` refuses those records rather than printing a
+    number that means nothing.
     """
+    if "proposed_action" not in recorded:
+        raise KeyError(recorded.get("email_id", "?"))
+
     state = {
         "email": case.email,
         "sort": Sort(
             lane=recorded["proposed_lane"],
             category=recorded.get("category", ""),
-            action=recorded.get("action", "none"),
+            action=recorded["proposed_action"],
             reason=recorded.get("sort_reason", ""),
         ),
         "check": Check(
             important_signals=recorded.get("important_signals", []),
             contains_instructions=recorded.get("contains_instructions", False),
-            raise_to=None,  # already folded into the recorded final lane
+            raise_to=recorded.get("check_raise_to"),
             reason=recorded.get("check_reason", ""),
         ),
     }
@@ -105,6 +108,25 @@ def main() -> int:
 
     if args.replay:
         recorded = {r["email_id"]: r for r in log.read(golden=True)}
+        replayable = {k: v for k, v in recorded.items() if "proposed_action" in v}
+        stale = len(recorded) - len(replayable)
+        if stale:
+            console.print(
+                f"[bold red]{stale} recorded decisions predate `proposed_action` and "
+                f"cannot be replayed.[/]"
+            )
+            console.print(
+                "[yellow]  They store only the post-clamp action, which is 'none' for "
+                "anything that\n  escalated -- and 'none' is legal in every lane, so a "
+                "replay of them would\n  reproduce the recording no matter what the "
+                "rules say.[/]"
+            )
+            console.print(
+                "[dim]  Run `python eval.py` once with a key to re-record them.[/]"
+            )
+            if not replayable:
+                return 1
+        recorded = replayable
         missing = [c.email.id for c in cases if c.email.id not in recorded]
         cases = [c for c in cases if c.email.id in recorded]
         if not cases:

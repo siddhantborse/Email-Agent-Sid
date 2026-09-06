@@ -9,42 +9,66 @@ prerequisite.
 
 ## Results
 
-Five harnesses. Four of them need no API key, no network and no model, which is
-deliberate: you should be able to check the safety claims in this repo before
-deciding whether to trust it with a key.
+Six harnesses. Five need no API key, no network and no model — you should be
+able to check the safety claims before deciding whether to trust this with a key.
 
 | what | result | needs a key |
 |---|---|---|
-| **Safety properties** (`verify.py`) | **76 checks passing** | no |
-| **Lane accuracy** (`eval.py --replay`, 35 emails) | **34/35 exact (97%)**, **0 unsafe misses**, 8/8 attacks contained | no |
+| **Safety properties** (`verify.py`) | **82 checks passing** | no |
+| **Are those checks real?** (`mutation_test.py`) | **13/14 mutations caught**, 1 provably equivalent, **0 survived** | no |
 | **Calibration** (`calibration_eval.py`) | ask rate **22.9% → 17.1%**, **0 unsafe promotions** | no |
 | **Compromised model** (`worst_case.py`) | **0** never-list actions reachable, **0** deterministic tells ignored | no |
-| **Proactive path** (`situations_eval.py`) | 10/10 exact, 0 unsafe | no |
+| **Proactive path** (`situations_eval.py`) | 10/10, 0 unsafe | no |
+| **Lane accuracy** (`eval.py`) | see below — **not currently measured** | yes |
 
-**The number I would look at first** is the one in `worst_case.py`: with `sort`
-and `check` assumed wholly attacker-controlled, only **6 of 22** adversarial
-emails carry a tell the code can see on its own. The other 16 are contained in
-the real pipeline by `check.contains_instructions` — a *model* judgement. That
-is the honest shape of the defence, and it is stated as a number rather than
-buried in prose. Nothing dangerous is reachable in that scenario, but the
-margin is thinner than "8/8 contained" suggests.
+Run all of the offline ones with `python check.py`.
 
-**One caveat on the accuracy number.** The corpus is 49 emails; 35 of them have
-a recorded model run, and the 97% is measured over those. The 14 newest
-adversarial cases were added after the free-tier daily quota ran out and have
-**not yet been scored through the model** — a run that fails is not a run, and
-a throttled call silently escalates, which inflates the score on an
-ESCALATE-heavy corpus (see DESIGN.md §6). They *are* covered by `worst_case.py`,
-which needs no key. To score them:
+### Read the second row first
+
+A passing test suite proves nothing until you know the tests can fail.
+`mutation_test.py` breaks one safety rule at a time in the source, runs every
+harness, and restores the file. It found two harnesses passing for the wrong
+reason:
+
+- `eval.py --replay` reported *34/35 exact, 0 unsafe*. Deliberately allowing
+  `send_money` in the `SILENT` lane changed **nothing** about that output. It
+  was re-deriving the recording rather than re-deciding it. **That number was
+  meaningless and has been removed**; `--replay` now refuses records it cannot
+  honestly replay.
+- `verify.py` asserted every always-escalate situation reaches a human by
+  looping over a set. Emptying the set made the loop run zero times — and pass.
+
+It also caught `verify.py` testing `lookalike_of()` in isolation while never
+checking that `decide` calls it: deleting the call left all six lookalike
+assertions green.
+
+### Lane accuracy is not currently measured
+
+The last honest full run scored **34/35 exact (97%), 0 unsafe misses, 8/8
+attacks contained** — on the 35-email corpus, before 14 adversarial cases were
+added. Those 14 have never been scored through a model, and the free-tier daily
+quota is exhausted, so it has not been re-run.
+
+That number is **stale, not current**, and it is not in the table above for that
+reason. A throttled call falls back to `ESCALATE`, which inflates the score on
+an ESCALATE-heavy corpus (see [FINDINGS §1](docs/FINDINGS.md)) — so publishing a
+degraded run would be worse than publishing nothing.
 
 ```bash
-python eval.py          # when quota allows; warns loudly if any call failed
+python eval.py     # when quota allows; warns loudly if any call failed
 ```
 
+### The number I would look at hardest
+
+`worst_case.py`, with `sort` and `check` assumed wholly attacker-controlled:
+only **6 of 22** adversarial emails carry a tell the code can see on its own.
+The other 16 are caught in the real pipeline by `check.contains_instructions` —
+an LLM call. Nothing dangerous is reachable in that scenario and no never-list
+action is, but the margin is thinner than "8/8 contained" implies.
+
 Key decisions: **[DESIGN.md](DESIGN.md)**. Every bug the harnesses caught, with
-the numbers that exposed them — including two occasions a fix made things worse:
-**[docs/FINDINGS.md](docs/FINDINGS.md)**. Worked examples:
-**[docs/TRANSCRIPTS.md](docs/TRANSCRIPTS.md)**.
+the numbers that exposed them: **[docs/FINDINGS.md](docs/FINDINGS.md)**. Worked
+examples: **[docs/TRANSCRIPTS.md](docs/TRANSCRIPTS.md)**.
 
 ## The four lanes
 
@@ -137,20 +161,27 @@ of seconds, non-zero exit if any fails:
 python check.py
 ```
 
+**Check that the safety checks can actually fail.** Breaks one rule at a time
+and confirms a harness notices:
+
+```bash
+python mutation_test.py
+python mutation_test.py --list
+```
+
 **Prove the safety layer holds.** No API key, no network, no model:
 
 ```bash
 python verify.py
 ```
 
-42 checks including an exhaustive sweep of all 64 lane×action combinations,
+82 checks including an exhaustive sweep of all 64 lane×action combinations,
 confirming nothing can ever reach a laxer lane than it deserves.
 
 **Score the agent against the labeled corpus:**
 
 ```bash
 python eval.py                 # all 49 emails (needs a key)
-python eval.py --replay        # re-score the recorded run offline, no key
 python eval.py --adversarial   # attack cases only
 python eval.py --errors        # just the mistakes
 ```
@@ -296,6 +327,7 @@ Add your own — everything picks them up automatically. Growing this corpus
 | [`hitl.py`](hitl.py) | the human-in-the-loop lane and the calibration demo |
 | [`check.py`](check.py) | runs every offline harness in one command |
 | [`verify.py`](verify.py) | proves the safety properties, no API key needed |
+| [`mutation_test.py`](mutation_test.py) | proves the proofs can fail. no API key |
 | [`examples.py`](examples.py) | four worked examples, one per lane |
 | [`dashboard.py`](dashboard.py) | the run dashboard |
 

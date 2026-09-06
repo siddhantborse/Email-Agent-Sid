@@ -310,6 +310,27 @@ check(
     f"{d.final_lane}/{d.action}",
 )
 
+# Testing lookalike_of() in isolation says nothing about whether `decide` calls
+# it. Mutation testing caught exactly that: deleting the raise from _decide_node
+# left all six lookalike assertions passing. Wiring gets its own check.
+for addr in ["d@knowncompany-support.example", "d@knowncompany.com",
+             "d@knowncompany.example.evil.com", "d@knowncompanny.example"]:
+    d = decide(lane="SILENT", action="archive", sender_email=addr)
+    check(
+        f"decide() consults the lookalike check: {addr}",
+        d.final_lane == "ESCALATE" and d.action == "none",
+        f"{d.final_lane}/{d.action}",
+    )
+
+# Same wiring question for masking. `mask()` passing its own unit tests does not
+# prove _decide_node escalates on the result.
+d = decide(lane="SILENT", action="archive", masked=["otp"])
+check(
+    "decide() escalates on masked content",
+    d.final_lane == "ESCALATE" and d.action == "none",
+    f"{d.final_lane}/{d.action}",
+)
+
 print("\n--- calibration: learning is bounded by the rules table ---")
 
 from langgraph.store.memory import InMemoryStore  # noqa: E402
@@ -510,10 +531,17 @@ check(
     "an unknown situation kind takes no action",
     situate("not_a_real_kind").action == "none",
 )
-for kind in sit.ALWAYS_ESCALATE:
+# Assert the set is populated before looping over it. Mutation testing emptied
+# ALWAYS_ESCALATE and every check below passed -- by running zero times.
+check(
+    "the always-escalate set is not empty",
+    len(sit.ALWAYS_ESCALATE) >= 2,
+    str(sit.ALWAYS_ESCALATE),
+)
+for kind in ["invoice_due", "unread_security_alert"]:
     check(
         f"'{kind}' reaches a human",
-        situate(kind).final_lane == "ESCALATE",
+        kind in sit.ALWAYS_ESCALATE and situate(kind).final_lane == "ESCALATE",
     )
 check(
     "a tainted thread escalates on the proactive path",

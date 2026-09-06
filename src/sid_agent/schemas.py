@@ -67,9 +67,16 @@ class Decision(BaseModel):
     date: str = ""
 
     category: str = ""
-    action: str = "none"
+    action: str = "none"  # what will be done, after the lane clamped it
 
     proposed_lane: Lane  # what the AI suggested
+    # What the AI proposed *before* the lane clamped it, and what the check
+    # asked for. Recorded because `action` alone is lossy: a clamped decision
+    # stores "none", and "none" is permitted in every lane, so a log that keeps
+    # only the final action cannot be re-decided -- replaying it reproduces
+    # whatever was recorded no matter what the rules say.
+    proposed_action: str = ""
+    check_raise_to: Optional[Lane] = None
     final_lane: Lane  # what the rules settled on
     # Every reason the lane was raised, in order. Empty means the AI was trusted as-is.
     raises: list[str] = Field(default_factory=list)

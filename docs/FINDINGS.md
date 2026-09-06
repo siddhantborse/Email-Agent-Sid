@@ -227,3 +227,53 @@ masked content forces an `ESCALATE`, so a false positive costs the user a
 pointless glance. It is admitted only as `"your code"`, `"code:"` and
 `"code is"`. The first cut of that matched `"the codebase"`. Both directions
 are now tested: 19 shapes that must mask, 7 ordinary emails that must not.
+
+---
+
+## 8. Two harnesses were passing for the wrong reason
+
+Everything above was found by a harness. This one was found by asking whether
+the harnesses could fail at all.
+
+`mutation_test.py` breaks one safety rule in the source, runs every harness,
+and restores the file. A harness that still passes with the rule broken was not
+testing that rule. Fourteen mutations; two survivors that should not have.
+
+**`eval.py --replay` was measuring nothing.** It reported *34/35 exact, 0 unsafe
+misses* and was quoted in the README as lane accuracy. Allowing `send_money` in
+the `SILENT` lane changed **0 of 35** outcomes.
+
+The cause is worth stating exactly, because it is subtle and it is a data-model
+bug rather than a logic one. Replay reconstructed the model's suggestion from
+the recorded decision — but the log stored only the **post-clamp** action. Any
+email that escalated had its action rewritten to `none` before it was written
+out, and `none` is permitted in every lane. So the replay handed `decide` an
+action that no rule could object to, and got back the lane it started with.
+It re-derived the recording.
+
+`Decision` now records `proposed_action` and `check_raise_to` — what the model
+actually said, before the lane touched it. Records without those fields are
+refused by `--replay` rather than silently producing a number, and the 97% is
+gone from the README. It is quoted once, in a section that says plainly that it
+is stale and that the 14 newest adversarial emails have never been scored.
+
+**`verify.py` had a check that ran zero times.** It asserted every member of
+`ALWAYS_ESCALATE` reaches a human by iterating the set. Emptying the set made
+the loop iterate nothing and pass. It now asserts the set is populated first.
+
+A third finding, less dramatic but the same shape: `verify.py` had six
+assertions about `lookalike_of()` and none about whether `decide` *calls* it.
+Deleting the call from `_decide_node` left all six green. There are now
+end-to-end checks for the lookalike, display-name and masking raises — testing
+a function and testing its wiring are different tests.
+
+Final state: 14 mutations, 13 caught, 1 equivalent. The equivalent one loosens
+the `invoice_due` playbook row, which changes no behaviour because
+`ALWAYS_ESCALATE` pins that situation independently — verified by running it,
+not assumed. Equivalent mutants are reported separately rather than counted as
+passes.
+
+**The general lesson.** The two bad harnesses were both *green* and both
+*specific* — they printed real-looking numbers about real properties. Nothing
+about reading them suggested a problem. What exposed them was the only question
+that reliably does: *make the thing they check untrue, and see if they notice.*

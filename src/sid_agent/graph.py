@@ -144,6 +144,8 @@ def _decide_node(state: State) -> State:
             category=sort.category,
             action=action,
             proposed_lane=sort.lane,
+            proposed_action=sort.action,
+            check_raise_to=check.raise_to,
             final_lane=lane,
             raises=raises,
             hazards=hazards,
