@@ -6,7 +6,7 @@ with their inbox.
 ---
 
 **The bugs these decisions were paid for in are in
-[docs/FINDINGS.md](FINDINGS.md).** Every one was found by measurement, not by
+[docs/FINDINGS.md](docs/FINDINGS.md).** Every one was found by measurement, not by
 reading the code, and two of them were introduced by a previous fix. That file
 is the honest record; this one is the short version.
 
@@ -104,7 +104,7 @@ consecutive accepts:
 | `send_money` | ESCALATE | ESCALATE — on the never-list |
 
 Three further bounds, each added after an adversarial review showed it did not
-actually hold ([FINDINGS §5](FINDINGS.md), [§6](FINDINGS.md)):
+actually hold ([FINDINGS §5](docs/FINDINGS.md), [§6](docs/FINDINGS.md)):
 
 - Promotion is refused outright for any decision the deterministic layer flagged
   as **hazardous** — masked content, agent-directed text, a lookalike domain, a
@@ -164,7 +164,7 @@ while holding *unsafe* at zero. Any change that buys accuracy with an unsafe
 miss is a regression.
 
 The war stories behind these numbers — including a run that scored *better*
-because half its model calls failed — are in [docs/FINDINGS.md](FINDINGS.md).
+because half its model calls failed — are in [docs/FINDINGS.md](docs/FINDINGS.md).
 
 ---
 
