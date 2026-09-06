@@ -114,12 +114,16 @@ def decide_situation(
     action, lane = PLAYBOOK.get(situation.kind, ("none", rules.DEFAULT_LANE))
     proposed = lane
     raises: list[str] = []
+    hazards: list[str] = []
 
-    def raise_to(target: rules.Lane, why: str) -> None:
+    def raise_to(target: rules.Lane, why: str, *, hazard: bool = True) -> None:
+        """Same contract as graph._decide_node: only up, and say whether it matters."""
         nonlocal lane
         harder = rules.more_cautious(lane, target)
         if harder != lane:
             raises.append(f"{lane} -> {harder}: {why}")
+            if hazard:
+                hazards.append(why)
             lane = harder
 
     # An unknown kind is an unknown situation, and unknown means escalate. This
@@ -143,7 +147,7 @@ def decide_situation(
     # there is one authority table, not one per entry point.
     needed = rules.min_lane_for(action)
     if needed != lane:
-        raise_to(needed, f"'{action}' is not permitted in {proposed}")
+        raise_to(needed, f"'{action}' is not permitted in {proposed}", hazard=False)
 
     # Calibration, bounded exactly as it is for email.
     if store is not None:
@@ -153,7 +157,7 @@ def decide_situation(
         # ledger does not get to lower it again.
         earned, why = memory.earned_lane(
             store, user_id, situation.sender_email, action, lane,
-            blocked=situation.tainted or bool(raises),
+            blocked=situation.tainted or bool(hazards),
         )
         if why:
             raises.append(why)
@@ -171,6 +175,7 @@ def decide_situation(
         proposed_lane=proposed,
         final_lane=lane,
         raises=raises,
+        hazards=hazards,
         sort_reason=situation.detail,
         check_reason="no model call: situations carry no untrusted text",
     )

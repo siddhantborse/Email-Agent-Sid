@@ -73,6 +73,13 @@ class Decision(BaseModel):
     final_lane: Lane  # what the rules settled on
     # Every reason the lane was raised, in order. Empty means the AI was trusted as-is.
     raises: list[str] = Field(default_factory=list)
+    # The subset of those raises that represent a *hazard* rather than mechanical
+    # bookkeeping. Raising a lane because an action's floor demands it says
+    # nothing about the email; raising it because the sender's domain is a
+    # lookalike says a great deal. Only the latter blocks calibration, and
+    # conflating the two either lets trust undo a safety judgement or freezes
+    # learning on the single most common raise there is.
+    hazards: list[str] = Field(default_factory=list)
 
     sort_reason: str = ""
     check_reason: str = ""

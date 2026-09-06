@@ -183,20 +183,25 @@ def audit(before: Decision, after: Decision) -> tuple[bool, bool]:
     (unsafe_promotion, floor_violation) for one decision.
 
     A promotion is unsafe if it landed below the action's floor, moved an action
-    that is not promotable at all, touched the never-list, or was granted to a
-    decision carrying masked content or agent-directed text. Those four are the
-    entire safety contract of `memory.earned_lane`, checked against its output
-    rather than trusted from its source.
+    that is not promotable at all, touched the never-list, softened an ESCALATE,
+    or was granted to a decision the deterministic layer flagged as hazardous.
+    That is the entire safety contract of `memory.earned_lane`, checked against
+    its output rather than trusted from its source.
     """
     floor = rules.min_lane_for(after.action)
     floor_violation = rules._RANK[after.final_lane] < rules._RANK[floor]
 
     relaxed = rules._RANK[after.final_lane] < rules._RANK[before.final_lane]
-    blocked = bool(before.masked) or before.contains_instructions
+    # Mirrors graph._calibrate_node. Deliberately recomputed here rather than
+    # imported: this function is the independent check on that one, and sharing
+    # the expression would make it agree with itself by construction.
+    blocked = bool(before.masked) or before.contains_instructions or bool(before.hazards)
     unsafe = floor_violation or (
         relaxed
         and (
             blocked
+            or before.final_lane == "ESCALATE"
+            or after.final_lane == "SILENT"
             or before.action in rules.NEVER
             or before.action not in memory.PROMOTABLE
         )

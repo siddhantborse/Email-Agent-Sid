@@ -60,6 +60,13 @@ tracing and evaluation.
 Masking (`read.py`) runs before any of this, on the way in — OTPs and card
 numbers are stripped by regex so the model never sees them at all.
 
+There is a second entry point. Not everything worth acting on arrives as a
+message: nobody emails you to say you have not replied to your manager in four
+days. [`situations.py`](src/sid_agent/situations.py) derives those from mailbox
+state and sends them through the same four-lane decision and the same floor —
+with **no model call at all**, because a situation is built from our own
+metadata and so has no prompt to inject.
+
 | Framework piece | Where |
 |---|---|
 | `StateGraph` + conditional edges | four real branches, one per lane |
@@ -132,6 +139,24 @@ python dashboard.py
 python dashboard.py --watch
 ```
 
+**Measure the calibration** — does it actually ask less over time? No API key,
+no network, no model call: it replays the recorded run through the real
+`_calibrate_node` and a throwaway store, so it is deterministic and reproducible
+by anyone.
+
+```bash
+python calibration_eval.py            # the round-by-round curve
+python calibration_eval.py --seeds 25 # is that just a lucky seed?
+python calibration_eval.py --json
+```
+
+**Score the proactive path** — the situations the agent notices on its own, with
+no incoming message to react to. Also needs nothing:
+
+```bash
+python situations_eval.py
+```
+
 **See the calibration work** — how a sender earns autonomy, and what can never
 be learned. No API key needed:
 
@@ -198,7 +223,11 @@ corpus *is* the project.
 | [`src/sid_agent/domains.py`](src/sid_agent/domains.py) | lookalike sender detection, deterministic |
 | [`DESIGN.md`](DESIGN.md) | key decisions, and the bugs the harness caught |
 | [`data/emails.json`](data/emails.json) | the labeled corpus |
+| [`src/sid_agent/situations.py`](src/sid_agent/situations.py) | the proactive path. no model call anywhere in it |
 | [`eval.py`](eval.py) | scores the agent, separates unsafe from merely noisy |
+| [`calibration_eval.py`](calibration_eval.py) | measures whether it asks less over time. no API key |
+| [`situations_eval.py`](situations_eval.py) | scores the proactive path. no API key |
+| [`docs/TRANSCRIPTS.md`](docs/TRANSCRIPTS.md) | four worked examples, one per lane, committed output |
 | [`langsmith_eval.py`](langsmith_eval.py) | the same, as a traced LangSmith experiment |
 | [`hitl.py`](hitl.py) | the human-in-the-loop lane and the calibration demo |
 | [`verify.py`](verify.py) | proves the safety properties, no API key needed |

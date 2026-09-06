@@ -356,8 +356,7 @@ for lane_in in rules.LANES:
             st = store_with(d.action, ["accepted"] * 100)
             earned, _ = memory.earned_lane(
                 st, "u", "someone@example.com", d.action, d.final_lane,
-                blocked=(bool(d.masked) or d.contains_instructions
-                         or bool(d.raises) or bool(d.important_signals)),
+                blocked=bool(d.masked) or d.contains_instructions or bool(d.hazards),
             )
             if rules._RANK[earned] < rules._RANK[d.final_lane]:
                 composed.append((lane_in, action, kwargs, d.final_lane, earned))
