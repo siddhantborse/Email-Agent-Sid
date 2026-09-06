@@ -1,0 +1,18 @@
+.env
+.secrets/
+logs/
+*.jsonl
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# The committed reference run, so the dashboard works with no API key.
+# Must come after *.jsonl -- gitignore applies the last matching rule.
+!data/golden_run.jsonl
+.venv-mac/
+Scripts/
+Include/
+Lib/
+pyvenv.cfg

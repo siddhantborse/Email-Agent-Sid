@@ -1,0 +1,7 @@
+{
+  "dependencies": ["."],
+  "graphs": {
+    "sid_agent": "./src/sid_agent/graph.py:graph"
+  },
+  "env": ".env"
+}
