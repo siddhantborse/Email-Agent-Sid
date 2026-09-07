@@ -524,6 +524,56 @@ check("never-list actions stay at ESCALATE forever", never_moved is None, str(ne
 # ---------------------------------------------------------------------------
 # the proactive path: same floor, different entry point
 # ---------------------------------------------------------------------------
+# A failed model call falls back to ESCALATE. On an ESCALATE-heavy corpus that
+# reads as a near-perfect score: with no API key at all, eval.py printed
+# "Exact: 22/22 (100%), 22/22 contained" and exited 0. It now refuses to score
+# a degraded run, and that refusal depends entirely on this marker surviving in
+# the fallback text of both model steps.
+print("\n--- degraded-run detection ---")
+
+from sid_agent.schemas import FAILED_MARKER  # noqa: E402
+import sid_agent.check as check_mod  # noqa: E402
+import sid_agent.sort as sort_mod  # noqa: E402
+
+
+def _boom(*_a, **_k):
+    raise RuntimeError("simulated model outage")
+
+
+class _Raises:
+    """Stands in for the bound model so the failure path runs for real."""
+    def invoke(self, *_a, **_k):
+        raise RuntimeError("simulated model outage")
+
+
+_real_sort, _real_check = sort_mod.structured, check_mod.structured
+sort_mod.structured = check_mod.structured = lambda *_a, **_k: _Raises()
+try:
+    s_out = sort_mod.sort_email(Email(id="t", subject="s", body="b"))
+    c_out = check_mod.check_email(
+        Email(id="t", subject="s", body="b"),
+        Sort(lane="SILENT", category="c", action="archive", reason="r"),
+    )
+finally:
+    sort_mod.structured, check_mod.structured = _real_sort, _real_check
+
+check("a failed sort does not crash", s_out is not None)
+check("a failed sort escalates", s_out.lane == "ESCALATE", s_out.lane)
+check("a failed sort proposes no action", s_out.action == "none", s_out.action)
+check("a failed sort is greppable", FAILED_MARKER in s_out.reason, s_out.reason)
+check("a failed check raises to ESCALATE", c_out.raise_to == "ESCALATE", str(c_out.raise_to))
+check("a failed check is greppable", FAILED_MARKER in c_out.reason, c_out.reason)
+
+# And the whole pipeline, not just the two steps: a total model outage must
+# land every email in ESCALATE with nothing done.
+d = _decide_node({"email": Email(id="t", subject="s", body="b"),
+                  "sort": s_out, "check": c_out})["decision"]
+check(
+    "a total model outage ends in ESCALATE/none",
+    d.final_lane == "ESCALATE" and d.action == "none",
+    f"{d.final_lane}/{d.action}",
+)
+
 print("\n--- proactive situations (no model call anywhere in this path) ---")
 
 from sid_agent import situations as sit  # noqa: E402
@@ -631,7 +681,36 @@ check(
 )
 
 
+# --------------------------------------------------------------------------
+# the docs must agree with the code
+# --------------------------------------------------------------------------
+# The README has carried a stale check count twice, and once carried a number
+# produced by a harness that measured nothing. A number in prose is a number
+# nobody re-runs, so the one number the README states about this suite is
+# checked against this suite.
+#
+# Deliberately not a check() call: it has to compare against the *final* count,
+# and a check() that counts itself needs an offset that is wrong the moment
+# anyone adds a check above it.
+import re as _re  # noqa: E402
+
+_readme = Path(__file__).resolve().parent / "README.md"
+_stale = []
+if _readme.exists():
+    _text = _readme.read_text(encoding="utf-8")
+    _claims = {int(m) for m in _re.findall(r"\*\*(\d+) checks passing\*\*", _text)}
+    _claims |= {int(m) for m in _re.findall(r"^(\d+) checks including", _text, _re.M)}
+    _stale = sorted(c for c in _claims if c != total)
+    if not _claims:
+        _stale = ["(no claim found)"]
+
 print()
+if _stale:
+    print(
+        f"  README claims {_stale} checks; this suite has {total}.\n"
+        f"  Update the README, or the number nobody re-runs goes stale again.\n"
+    )
+    raise SystemExit(1)
 if failures:
     print(f"{failures} of {total} check(s) failed.\n")
     raise SystemExit(1)

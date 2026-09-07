@@ -14,8 +14,8 @@ able to check the safety claims before deciding whether to trust this with a key
 
 | what | result | needs a key |
 |---|---|---|
-| **Safety properties** (`verify.py`) | **82 checks passing** | no |
-| **Are those checks real?** (`mutation_test.py`) | **13/14 mutations caught**, 1 provably equivalent, **0 survived** | no |
+| **Safety properties** (`verify.py`) | **93 checks passing** | no |
+| **Are those checks real?** (`mutation_test.py`) | **15/17 mutations caught**, 2 provably equivalent, **0 survived** | no |
 | **Calibration** (`calibration_eval.py`) | ask rate **22.9% → 17.1%**, **0 unsafe promotions** | no |
 | **Compromised model** (`worst_case.py`) | **0** never-list actions reachable, **0** deterministic tells ignored | no |
 | **Proactive path** (`situations_eval.py`) | 10/10, 0 unsafe | no |
@@ -175,7 +175,7 @@ python mutation_test.py --list
 python verify.py
 ```
 
-82 checks including an exhaustive sweep of all 64 lane×action combinations,
+93 checks including an exhaustive sweep of all 64 lane×action combinations,
 confirming nothing can ever reach a laxer lane than it deserves.
 
 **Score the agent against the labeled corpus:**

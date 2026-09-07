@@ -36,8 +36,12 @@ Exit code is non-zero if any non-equivalent mutation survives.
 import subprocess
 import sys
 from pathlib import Path
-ROOT = Path("/Users/meetgajjar/Desktop/sid-agent")
-PY = str(ROOT / ".venv-mac/bin/python")
+
+# Resolved, not hardcoded: an earlier draft pinned an absolute path and the
+# interpreter of one particular virtualenv, so this file worked on exactly one
+# machine. Found by cloning the repo and running it.
+ROOT = Path(__file__).resolve().parent
+PY = sys.executable
 
 M = {
  "floor: allow send_money in SILENT": ("src/sid_agent/rules.py",
@@ -63,6 +67,10 @@ M = {
    "if blocked or action not in PROMOTABLE:", "if action not in PROMOTABLE:"),
  "calibration: promote after 1 accept": ("src/sid_agent/memory.py",
    "PROMOTE_AFTER = 5", "PROMOTE_AFTER = 1"),
+ "degraded runs stop being detectable": ("src/sid_agent/schemas.py",
+   'FAILED_MARKER = "failed ("', 'FAILED_MARKER = "zzz_never_matches("'),
+ "sort failure stops escalating": ("src/sid_agent/sort.py",
+   'lane="ESCALATE",\n            category="unknown"', 'lane="SILENT",\n            category="unknown"'),
  "situations: invoice_due goes silent": ("src/sid_agent/situations.py",
    '"invoice_due": ("none", "ESCALATE"),', '"invoice_due": ("archive", "SILENT"),'),
  "situations: taint no longer blocks": ("src/sid_agent/situations.py",
@@ -79,6 +87,10 @@ M = {
 EQUIVALENT = {
     "situations: invoice_due goes silent":
         "ALWAYS_ESCALATE pins it independently of the playbook row",
+    "degraded runs stop being detectable":
+        "sort.py, check.py and eval.py all import the same constant, so changing "
+        "its value changes every user of it consistently and detection still "
+        "works -- which is the point of having centralised it",
 }
 
 H = ["verify.py", "worst_case.py", "situations_eval.py", "calibration_eval.py"]

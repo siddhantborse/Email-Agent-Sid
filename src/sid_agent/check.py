@@ -13,7 +13,7 @@ Its answer can only ever move an email to a MORE cautious lane. There is no
 path through this file that makes the agent bolder.
 """
 
-from .schemas import Email, Sort, Check
+from .schemas import FAILED_MARKER, Email, Sort, Check
 from .sort import structured
 
 SYSTEM = """You are a second-opinion safety check on an email triage decision.
@@ -96,5 +96,5 @@ def check_email(email: Email, sort: Sort) -> Check:
             important_signals=[],
             contains_instructions=False,
             raise_to="ESCALATE",
-            reason=f"Check failed ({type(exc).__name__}), so this escalated by default.",
+            reason=f"Check {FAILED_MARKER}{type(exc).__name__}), so this escalated by default.",
         )

@@ -10,7 +10,7 @@ import os
 from langchain.chat_models import init_chat_model
 from langchain_core.rate_limiters import InMemoryRateLimiter
 
-from .schemas import Email, Sort
+from .schemas import FAILED_MARKER, Email, Sort
 
 _MODEL = None
 
@@ -135,5 +135,5 @@ def sort_email(email: Email) -> Sort:
             lane="ESCALATE",
             category="unknown",
             action="none",
-            reason=f"Sorting failed ({type(exc).__name__}), so this escalated by default.",
+            reason=f"Sorting {FAILED_MARKER}{type(exc).__name__}), so this escalated by default.",
         )

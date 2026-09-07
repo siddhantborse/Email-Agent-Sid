@@ -83,7 +83,11 @@ escalate anything close-but-not-equal. Suffix wrapping
 (`knowncompany-support`), typos (`knowncompanny`), bounded edit distance. Real
 subdomains and genuinely unrelated domains are left alone.
 
-**Final: 97% exact, 0 unsafe misses, 8/8 attacks contained, all four lanes live.**
+**At that point: 97% exact, 0 unsafe misses, 8/8 attacks contained, all four
+lanes live** — on the 35-email corpus as it then stood. That figure is history,
+not the current headline: 14 adversarial emails were added afterwards and have
+never been scored through a model (§8, and the README says so where the number
+appears).
 
 The lesson worth stating: when the model cannot be relied on to be suspicious,
 encode the suspicion in code that cannot be talked out of it. Two prompt fixes
@@ -277,3 +281,57 @@ passes.
 *specific* — they printed real-looking numbers about real properties. Nothing
 about reading them suggested a problem. What exposed them was the only question
 that reliably does: *make the thing they check untrue, and see if they notice.*
+
+---
+
+## 9. Four more, found by running it the way a reviewer would
+
+Everything above was found by a harness or a review. These came from cloning the
+repo into a clean virtualenv with no `.env` and running every documented command
+— which had never been done.
+
+**A fresh clone scored 1/22, not 6/22.** `worst_case.py` reported "adversarial
+held by code 6/22 (27%)" here and **1/22 (5%)** in a clean clone. Both numbers
+were real; the difference was `SID_KNOWN_DOMAINS`, which lives in `.env`, and
+`.env` is gitignored.
+
+`domains.py` only defends domains it has been told about. With an empty trust
+list it is a no-op — so five of the corpus's own regression cases, including the
+two written specifically to cover the TLD-swap and subdomain bugs from §5,
+silently stopped testing anything. They passed by not running.
+
+`data/emails.json` now declares `known_domains` and the loader applies it with
+`setdefault`, so the corpus is self-describing and a deployment's own config
+still wins. `worst_case.py` exits non-zero rather than report a number computed
+with the layer disabled.
+
+**`eval.py` printed a perfect score from a completely broken run.** With no API
+key, `python eval.py --adversarial` printed:
+
+```
+Exact:  22/22  (100%)
+Adversarial cases: 22/22 contained.
+```
+
+…then a warning *below* the headline, exit code **0**, and it wrote the fake
+run to the log the dashboard reads. Every one of those 22 calls had failed and
+fallen back to `ESCALATE`.
+
+This is §1 again, and §1's fix was insufficient: warning under the number does
+not work, because the number is what gets read, quoted, and pasted into a
+README. A degraded run now prints no score at all, writes no log, and exits 2.
+The marker the detection greps for is a shared constant rather than a literal
+retyped in three files.
+
+**`mutation_test.py` only ran on one machine.** It hardcoded an absolute path
+and a specific virtualenv's interpreter. `Path(__file__).parent` and
+`sys.executable` now.
+
+**The README's check count was stale twice.** `verify.py` now reads the README,
+compares the number it claims against the number this suite actually runs, and
+exits non-zero on a mismatch. Verified by drifting it on purpose.
+
+The pattern across all four: **every one is a claim that was true where it was
+written and false where it would be read.** Configuration in an ignored file,
+a warning below a headline, a path on one laptop, a number in prose. Running
+the thing the way its audience will run it is a different test from running it.

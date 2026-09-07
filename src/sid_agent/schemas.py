@@ -1,5 +1,12 @@
 """Data shapes passed between the steps. Small on purpose."""
 
+# Marker written into a decision's reason when a model call failed and the step
+# fell back to ESCALATE. eval.py greps for this to refuse scoring a degraded
+# run, so it lives here rather than being retyped in sort.py, check.py and
+# eval.py -- three copies of a magic substring is three chances for one of them
+# to drift and silently re-enable a 100%-looking score from a broken run.
+FAILED_MARKER = "failed ("
+
 from typing import Literal, Optional
 from pydantic import BaseModel, Field
 

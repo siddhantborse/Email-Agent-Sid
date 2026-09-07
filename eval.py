@@ -40,7 +40,7 @@ load_dotenv()
 from sid_agent import log, rules  # noqa: E402
 from sid_agent.dataset import Case, load  # noqa: E402
 from sid_agent.graph import _decide_node, build  # noqa: E402
-from sid_agent.schemas import Check, Decision, Sort  # noqa: E402
+from sid_agent.schemas import FAILED_MARKER, Check, Decision, Sort  # noqa: E402
 
 console = Console()
 LANES = rules.LANES
@@ -175,6 +175,38 @@ def main() -> int:
     unsafe = [r for r in results if r[2] < 0]
     cautious = [r for r in results if r[2] > 0]
 
+    # A model call that fails falls back to ESCALATE. On an ESCALATE-heavy corpus
+    # that does not merely go unreported -- it looks like a perfect score. With
+    # no API key at all this printed "Exact: 22/22 (100%), 22/22 contained" and
+    # exited 0. Warning under the headline was not enough: the headline is what
+    # gets read, quoted and pasted into a README. So a degraded run now refuses
+    # to print a score, refuses to write the log, and exits non-zero.
+    degraded = [
+        r for r in results
+        if FAILED_MARKER in (r[1].sort_reason or "") or FAILED_MARKER in (r[1].check_reason or "")
+    ]
+    if degraded:
+        console.print(
+            f"[bold red]{len(degraded)}/{len(results)} model calls failed and fell "
+            f"back to ESCALATE.[/]\n"
+        )
+        console.print(
+            "[yellow]No score is shown, because a failed call is indistinguishable "
+            "from a correct\nescalation and this corpus is ESCALATE-heavy -- the "
+            "failures would read as a\nnear-perfect result. See docs/FINDINGS.md "
+            "1.[/]\n"
+        )
+        reasons = {
+            (r[1].sort_reason or r[1].check_reason or "").split(FAILED_MARKER)[-1].split(")")[0]
+            for r in degraded
+        }
+        console.print(f"[dim]Causes: {', '.join(sorted(c for c in reasons if c))}[/]")
+        console.print(
+            "[dim]Fix: set a working key in .env, lower SID_RPS, or reduce "
+            "--workers. Then re-run.[/]\n"
+        )
+        return 2
+
     shown = [r for r in results if r[2] != 0] if args.errors else results
     if shown:
         table = Table(show_lines=False, header_style="bold")
@@ -199,12 +231,6 @@ def main() -> int:
             )
         console.print(table)
 
-    # A model call that fails falls back to ESCALATE. On an ESCALATE-heavy
-    # corpus that silently inflates accuracy, so it must never go unreported.
-    degraded = [
-        r for r in results
-        if "failed (" in (r[1].sort_reason or "") or "failed (" in (r[1].check_reason or "")
-    ]
 
     total = len(results)
     console.print(f"\n[bold]Exact:[/]  {len(exact)}/{total}  ({len(exact) / total:.0%})")
@@ -212,19 +238,6 @@ def main() -> int:
     console.print(
         f"[bold red]UNSAFE MISSES:[/] {len(unsafe)}  [dim](placed in a laxer lane than deserved)[/]"
     )
-
-    if degraded:
-        console.print(
-            f"\n[bold yellow]WARNING: {len(degraded)}/{total} emails had a failed model "
-            f"call and fell back to ESCALATE.[/]"
-        )
-        console.print(
-            "[yellow]  This score is not trustworthy -- failures look like correct "
-            "escalations.[/]"
-        )
-        console.print(
-            "[dim]  Lower SID_RPS in .env or reduce --workers, then run again.[/]"
-        )
 
     if unsafe:
         console.print("\n[bold red]These are the ones that matter:[/]")
