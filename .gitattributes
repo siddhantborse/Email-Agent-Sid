@@ -1,0 +1,12 @@
+# Keep line endings stable across platforms.
+#
+# mutation_test.py rewrites source files and restores them byte for byte, and
+# verify.py compares the README's stated check count against the real one. Both
+# are confused by a checkout that silently rewrites LF as CRLF, so text files
+# are pinned to LF everywhere -- including on Windows, where this project is
+# also run.
+* text=auto eol=lf
+
+*.png binary
+*.jpg binary
+*.zip binary

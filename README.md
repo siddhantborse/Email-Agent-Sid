@@ -62,8 +62,17 @@ quota, ~60 seconds.
 
 ```bash
 ollama pull llama3.2
-SID_MODEL=ollama:llama3.2 SID_RPS=100 python eval.py
 ```
+
+then put these two lines in `.env` and run `python eval.py`:
+
+```ini
+SID_MODEL=ollama:llama3.2
+SID_RPS=100
+```
+
+(`.env` rather than inline environment variables, because
+`VAR=value command` is shell syntax that does not exist in `cmd` or PowerShell.)
 
 **Four unsafe misses is a real result and it is not hidden.** A 3B model is
 substantially worse at this task than a hosted one, and the target for unsafe
@@ -152,15 +161,38 @@ cautious one. The worst a malicious email can achieve is being escalated.
 
 ## Setup
 
-```bash
+Windows:
+
+```bat
 python -m venv .venv
-
-source .venv/bin/activate      # macOS / Linux
-.venv\Scripts\activate         # Windows
-
+.venv\Scripts\activate
 pip install -r requirements.txt
-cp .env.example .env           # Windows: copy .env.example .env
+copy .env.example .env
 ```
+
+macOS / Linux:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+Then, on either:
+
+```
+python check.py
+```
+
+That runs every harness that needs no API key and no network — the safety
+proofs, the mutation test that proves those proofs can fail, the calibration
+measurement, the proactive path and the compromised-model sweep. It should
+print five `PASS` lines and exit 0. **If it does, the project works and nothing
+further is required to review it.**
+
+`python eval.py` is the only thing that needs a model, and there are two ways
+to get one — see below.
 
 You need a model key for steps 2 and 3. **Free options, no card required:**
 

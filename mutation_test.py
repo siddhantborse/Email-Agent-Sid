@@ -125,7 +125,12 @@ print("-" * 38 + " " + " ".join("-" * 11 for _ in H))
 
 undetected = []
 for name, (rel, old, new) in M.items():
-    f = ROOT / rel; orig = f.read_text(encoding="utf-8")
+    # Bytes, not text. read_text/write_text translate newlines, so on Windows
+    # restoring a file rewrote every LF as CRLF and left the whole repo dirty
+    # after a run that is supposed to leave no trace. Bytes round-trip exactly.
+    f = ROOT / rel
+    orig_bytes = f.read_bytes()
+    orig = orig_bytes.decode("utf-8")
     if old.startswith("re:"):
         pattern = old[3:]
         mutated, count = re.subn(pattern, new.replace("\\", "\\\\"), orig, count=1)
