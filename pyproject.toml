@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sid-agent"
+version = "0.1.0"
+description = "An email triage agent that sorts mail into four autonomy lanes, and the harnesses that measure whether it does so safely."
+requires-python = ">=3.10"
+
+# Kept in step with requirements.txt by verify.py, which fails if they drift.
+# requirements.txt stays because it is what the README tells you to run and what
+# a reviewer will reach for; this file exists because langgraph.json declares
+# `"dependencies": ["."]`, and without a build config `langgraph dev` cannot
+# install the package and simply fails. That command was in the README for the
+# whole project without ever being run.
+dependencies = [
+    "langgraph>=0.2.0",
+    "langchain>=0.3.0",
+    "langchain-core>=0.3.0",
+    "langchain-openai>=0.2.0",
+    "langchain-anthropic>=0.3.0",
+    "langchain-google-genai>=2.0.0",
+    "langchain-ollama>=0.2.0",
+    "pydantic>=2.0",
+    "python-dotenv>=1.0",
+    "rich>=13.0",
+    "langsmith>=0.1.100",
+]
+
+[project.optional-dependencies]
+# `langgraph dev` only. Separated so the core install stays small.
+studio = ["langgraph-cli[inmem]>=0.1.55"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 95
+target-version = "py310"
+
+[tool.black]
+line-length = 95

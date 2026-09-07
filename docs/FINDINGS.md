@@ -335,3 +335,31 @@ The pattern across all four: **every one is a claim that was true where it was
 written and false where it would be read.** Configuration in an ignored file,
 a warning below a headline, a path on one laptop, a number in prose. Running
 the thing the way its audience will run it is a different test from running it.
+
+---
+
+## 10. A documented command that could never have worked
+
+`langgraph dev` has been in the README since the beginning. It cannot run.
+
+`langgraph.json` declares `"dependencies": ["."]`, which tells the LangGraph CLI
+to pip-install the project directory. There was no `pyproject.toml` and no
+`setup.py`, so that install fails outright:
+
+```
+ERROR: ... does not appear to be a Python project:
+neither 'setup.py' nor 'pyproject.toml' found.
+```
+
+Every other entry point works because they all begin with
+`sys.path.insert(0, "src")` and never install anything. The one command that
+needs a real package is the one nobody ran.
+
+Fixed with a minimal `pyproject.toml`, with `langgraph-cli` moved to a `studio`
+extra so the core install stays small. That creates a second list of
+dependencies, which is its own drift risk, so `verify.py` now checks that
+`pyproject.toml` covers everything in `requirements.txt` — and a mutation
+removing one dependency confirms the check fires.
+
+Found the same way as everything in §9: by running a documented command instead
+of reading it.

@@ -14,8 +14,8 @@ able to check the safety claims before deciding whether to trust this with a key
 
 | what | result | needs a key |
 |---|---|---|
-| **Safety properties** (`verify.py`) | **93 checks passing** | no |
-| **Are those checks real?** (`mutation_test.py`) | **15/17 mutations caught**, 2 provably equivalent, **0 survived** | no |
+| **Safety properties** (`verify.py`) | **96 checks passing** | no |
+| **Are those checks real?** (`mutation_test.py`) | **17/19 mutations caught**, 2 provably equivalent, **0 survived** | no |
 | **Calibration** (`calibration_eval.py`) | ask rate **22.9% → 17.1%**, **0 unsafe promotions** | no |
 | **Compromised model** (`worst_case.py`) | **0** never-list actions reachable, **0** deterministic tells ignored | no |
 | **Proactive path** (`situations_eval.py`) | 10/10, 0 unsafe | no |
@@ -175,7 +175,7 @@ python mutation_test.py --list
 python verify.py
 ```
 
-93 checks including an exhaustive sweep of all 64 lane×action combinations,
+96 checks including an exhaustive sweep of all 64 lane×action combinations,
 confirming nothing can ever reach a laxer lane than it deserves.
 
 **Score the agent against the labeled corpus:**
@@ -235,8 +235,13 @@ python hitl.py --demo
 **Open it in LangGraph Studio:**
 
 ```bash
+pip install -e ".[studio]"
 langgraph dev
 ```
+
+`langgraph.json` declares `dependencies: ["."]`, so this needs the project to be
+installable — which it was not until `pyproject.toml` was added. The command had
+been in this README the whole time without ever being run.
 
 **Run it as a LangSmith experiment** (free tier, no card — smith.langchain.com):
 

@@ -682,6 +682,58 @@ check(
 
 
 # --------------------------------------------------------------------------
+# packaging must agree with itself
+# --------------------------------------------------------------------------
+# Two files now list the dependencies: requirements.txt, which the README tells
+# you to run, and pyproject.toml, which `langgraph dev` needs in order to
+# install the package at all. Two lists of the same thing drift, so they are
+# compared here rather than by whoever notices first.
+print("\n--- packaging ---")
+
+_root = Path(__file__).resolve().parent
+_pyproject = _root / "pyproject.toml"
+_reqs = _root / "requirements.txt"
+
+check(
+    "pyproject.toml exists",
+    _pyproject.exists(),
+    "langgraph.json declares dependencies ['.'], so `langgraph dev` needs one",
+)
+
+if _pyproject.exists() and _reqs.exists():
+    import re as _re2
+
+    def _names(text):
+        found = set()
+        for line in text.splitlines():
+            line = line.strip().strip('",')
+            if not line or line.startswith(("#", "[")):
+                continue
+            m = _re2.match(r"^([A-Za-z0-9_.\-]+)", line)
+            if m and not line.endswith("="):
+                found.add(m.group(1).lower().replace("_", "-"))
+        return found
+
+    _req_names = _names(_reqs.read_text(encoding="utf-8"))
+    _toml = _pyproject.read_text(encoding="utf-8")
+    _dep_block = _toml.split("dependencies = [", 1)[-1].split("]", 1)[0]
+    _extra_block = _toml.split("studio = [", 1)[-1].split("]", 1)[0] if "studio = [" in _toml else ""
+    _proj_names = _names(_dep_block) | _names(_extra_block)
+
+    _missing = sorted(_req_names - _proj_names)
+    check(
+        f"pyproject covers every requirement ({len(_req_names)} packages)",
+        not _missing,
+        f"in requirements.txt but not pyproject.toml: {_missing}",
+    )
+
+check(
+    "the package is importable by its real name",
+    (_root / "src" / "sid_agent" / "__init__.py").exists(),
+)
+
+
+# --------------------------------------------------------------------------
 # the docs must agree with the code
 # --------------------------------------------------------------------------
 # The README has carried a stale check count twice, and once carried a number
