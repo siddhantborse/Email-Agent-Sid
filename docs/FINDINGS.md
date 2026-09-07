@@ -363,3 +363,51 @@ removing one dependency confirms the check fires.
 
 Found the same way as everything in §9: by running a documented command instead
 of reading it.
+
+---
+
+## 11. Swapping the model tested §12's prediction, and the log was mixing runs
+
+The free tier's daily quota does not cover a 98-call run, so the 49-email corpus
+was scored on `ollama:llama3.2` instead — 3B parameters, fully local, ~60
+seconds, no key. Two things came out of it.
+
+### The prediction held
+
+DESIGN.md §9 claims the deterministic floor is model-independent and that the
+16 attacks with no code-visible tell are where the real risk sits. Changing the
+model is the experiment that tests it:
+
+| | gemini-3.5-flash-lite (35) | llama3.2 (49) |
+|---|---|---|
+| exact | 34/35 (97%) | 39/49 (80%) |
+| **unsafe misses** | **0** | **4** |
+| adversarial contained | 8/8 | 19/22 |
+
+The three attacks llama3.2 let through — `x05`, `x10`, `x15` — were **all** in
+the model-only set. **All six** code-held cases stayed held. Zero leakage
+through the deterministic layer under a model roughly an order of magnitude
+smaller.
+
+That is the strongest evidence in the repo for the central design claim, and it
+is evidence rather than argument because the prediction was written down first
+and then tested by changing something.
+
+Four unsafe misses is a bad number and it stays in the README. The floor held;
+the model's judgement did not, in the exact places the floor does not reach.
+
+### The log was averaging two runs
+
+Running a second eval exposed something that had been latent since the start.
+`log.write` appends -- correctly, it is an audit trail -- but `log.read`
+returned the whole file. After a 35-email run and a 49-email run the file held
+84 rows with 35 duplicated ids, and `dashboard.py` computed accuracy, lane
+distribution and the confusion matrix over the union: a Gemini run averaged with
+a llama3.2 run, presented as one result.
+
+`read()` now groups rows by the `logged_at` stamp `write` sets once per call and
+returns only the newest; `all_runs=True` gives the history. Three checks and a
+mutation cover it.
+
+Latent the whole time, and invisible until the corpus changed size — the second
+run is what made 84 rows obviously wrong where 70 would have looked plausible.

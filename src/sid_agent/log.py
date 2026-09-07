@@ -37,9 +37,21 @@ def write(decisions: list[Decision], path: Path | None = None) -> Path:
     return path
 
 
-def read(path: Path | None = None, *, golden: bool = False) -> list[dict]:
+def read(path: Path | None = None, *, golden: bool = False, all_runs: bool = False) -> list[dict]:
     """
-    Read the log back.
+    Read the most recent run back.
+
+    The file is append-only -- it is an audit trail, and losing the history of
+    what the agent decided would be the wrong trade. But every consumer of this
+    function wants *a run*, not the concatenation of every run ever made, and
+    reading it as one blob is silently wrong the moment the corpus changes size.
+
+    It was: a 35-email run and a 49-email run left 84 rows with 35 duplicated
+    ids, and `dashboard.py` computed accuracy, lane distribution and the
+    confusion matrix across the union of both -- a Gemini run averaged with a
+    llama3.2 run. Rows are grouped by `logged_at`, which `write` stamps once per
+    call, and only the newest group is returned. `all_runs=True` for the whole
+    history.
 
     With no fresh log (or `golden=True`), falls back to the committed run in
     data/golden_run.jsonl so the dashboard always has something real to show.
@@ -60,8 +72,13 @@ def read(path: Path | None = None, *, golden: bool = False) -> list[dict]:
         for line in f:
             line = line.strip()
             if line:
-                try:
-                    rows.append(json.loads(line))
-                except json.JSONDecodeError:
-                    continue  # skip a half-written line rather than blowing up
-    return rows
+                rows.append(json.loads(line))
+
+    if all_runs or not rows:
+        return rows
+
+    # Rows without a stamp are older than this field and sort last, so a log
+    # written before `logged_at` existed still yields something rather than
+    # nothing.
+    newest = max(r.get("logged_at", "") for r in rows)
+    return [r for r in rows if r.get("logged_at", "") == newest]

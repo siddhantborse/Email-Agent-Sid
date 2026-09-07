@@ -682,6 +682,43 @@ check(
 
 
 # --------------------------------------------------------------------------
+# the log reads back as one run, not all of them
+# --------------------------------------------------------------------------
+# decisions.jsonl is append-only on purpose -- it is an audit trail. But every
+# consumer wants a run, and reading the file as one blob silently averaged a
+# 35-email run with a 49-email one: 84 rows, 35 duplicated ids, and a dashboard
+# reporting accuracy across the union of two different models.
+print("\n--- decision log ---")
+
+from sid_agent import log as _log  # noqa: E402
+from datetime import datetime, timezone  # noqa: E402
+import tempfile  # noqa: E402
+
+with tempfile.TemporaryDirectory() as _tmp:
+    _p = Path(_tmp) / "decisions.jsonl"
+    _d = decide(lane="SILENT", action="archive")
+    _log.write([_d, _d.model_copy(update={"email_id": "b"})], _p)
+    _log.write([_d.model_copy(update={"email_id": "c"})], _p)
+
+    _latest = _log.read(_p)
+    _all = _log.read(_p, all_runs=True)
+    check(
+        "reading the log returns only the most recent run",
+        len(_latest) == 1 and _latest[0]["email_id"] == "c",
+        f"got {[r['email_id'] for r in _latest]}",
+    )
+    check(
+        "the full history is still there when asked for",
+        len(_all) == 3,
+        f"got {len(_all)} rows",
+    )
+    check(
+        "no duplicate ids in a single run",
+        len({r["email_id"] for r in _latest}) == len(_latest),
+    )
+
+
+# --------------------------------------------------------------------------
 # packaging must agree with itself
 # --------------------------------------------------------------------------
 # Two files now list the dependencies: requirements.txt, which the README tells

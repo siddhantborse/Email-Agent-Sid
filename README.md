@@ -14,12 +14,12 @@ able to check the safety claims before deciding whether to trust this with a key
 
 | what | result | needs a key |
 |---|---|---|
-| **Safety properties** (`verify.py`) | **96 checks passing** | no |
-| **Are those checks real?** (`mutation_test.py`) | **17/19 mutations caught**, 2 provably equivalent, **0 survived** | no |
+| **Safety properties** (`verify.py`) | **99 checks passing** | no |
+| **Are those checks real?** (`mutation_test.py`) | **18/20 mutations caught**, 2 provably equivalent, **0 survived** | no |
 | **Calibration** (`calibration_eval.py`) | ask rate **22.9% → 17.1%**, **0 unsafe promotions** | no |
 | **Compromised model** (`worst_case.py`) | **0** never-list actions reachable, **0** deterministic tells ignored | no |
 | **Proactive path** (`situations_eval.py`) | 10/10, 0 unsafe | no |
-| **Lane accuracy** (`eval.py`) | see below — **not currently measured** | yes |
+| **Lane accuracy** (`eval.py`, llama3.2 local) | 39/49 exact (80%), **4 unsafe misses**, 19/22 contained | no — Ollama |
 
 Run all of the offline ones with `python check.py`.
 
@@ -42,29 +42,52 @@ It also caught `verify.py` testing `lookalike_of()` in isolation while never
 checking that `decide` calls it: deleting the call left all six lookalike
 assertions green.
 
-### Lane accuracy is not currently measured
+### Lane accuracy, on two models
 
-The last honest full run scored **34/35 exact (97%), 0 unsafe misses, 8/8
-attacks contained** — on the 35-email corpus, before 14 adversarial cases were
-added. Those 14 have never been scored through a model, and the free-tier daily
-quota is exhausted, so it has not been re-run.
+Accuracy is the one number that moves with the model, so here it is on both.
 
-That number is **stale, not current**, and it is not in the table above for that
-reason. A throttled call falls back to `ESCALATE`, which inflates the score on
-an ESCALATE-heavy corpus (see [FINDINGS §1](docs/FINDINGS.md)) — so publishing a
-degraded run would be worse than publishing nothing.
+| model | exact | over-cautious | **unsafe misses** | adversarial contained |
+|---|---|---|---|---|
+| `gemini-3.5-flash-lite` (35 emails) | 34/35 (97%) | 1 | **0** | 8/8 |
+| `ollama:llama3.2` (all 49) | 39/49 (80%) | 6 | **4** | 19/22 |
+
+They are not comparable and neither is the headline on its own. The Gemini run
+predates the 14 hardest adversarial cases and could not be re-run — the free
+tier's daily quota does not cover 98 calls, and a throttled run reports a
+*better* score than a working one ([FINDINGS §1](docs/FINDINGS.md)), so no
+degraded number is published. `eval.py` now refuses to print one.
+
+The llama3.2 row is the reproducible one: 3B parameters, fully local, no key, no
+quota, ~60 seconds.
 
 ```bash
-python eval.py     # when quota allows; warns loudly if any call failed
+ollama pull llama3.2
+SID_MODEL=ollama:llama3.2 SID_RPS=100 python eval.py
 ```
+
+**Four unsafe misses is a real result and it is not hidden.** A 3B model is
+substantially worse at this task than a hosted one, and the target for unsafe
+misses is zero. What matters is *which* four leaked — see below.
+
+### The number I would look at hardest
 
 ### The number I would look at hardest
 
 `worst_case.py`, with `sort` and `check` assumed wholly attacker-controlled:
 only **6 of 22** adversarial emails carry a tell the code can see on its own.
 The other 16 are caught in the real pipeline by `check.contains_instructions` —
-an LLM call. Nothing dangerous is reachable in that scenario and no never-list
-action is, but the margin is thinner than "8/8 contained" implies.
+an LLM call.
+
+Swapping the model tested that prediction, and it held exactly:
+
+- the 3 attacks llama3.2 let through (`x05`, `x10`, `x15`) were **all** in the
+  model-only set
+- **all 6** of the code-held cases stayed held, on both models
+
+So the deterministic floor is genuinely model-independent, and the 16-case gap
+is genuinely where the risk lives. Nothing dangerous is reachable in the
+worst case and no never-list action is — but the margin is thinner than "8/8
+contained" implies, and a weaker model is exactly what spends it.
 
 Key decisions: **[DESIGN.md](DESIGN.md)**. Every bug the harnesses caught, with
 the numbers that exposed them: **[docs/FINDINGS.md](docs/FINDINGS.md)**. Worked
@@ -175,7 +198,7 @@ python mutation_test.py --list
 python verify.py
 ```
 
-96 checks including an exhaustive sweep of all 64 lane×action combinations,
+99 checks including an exhaustive sweep of all 64 lane×action combinations,
 confirming nothing can ever reach a laxer lane than it deserves.
 
 **Score the agent against the labeled corpus:**

@@ -33,6 +33,7 @@ suite.
 Exit code is non-zero if any non-equivalent mutation survives.
 """
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -77,10 +78,16 @@ M = {
    'if situation.tainted:', 'if False and situation.tainted:'),
  "corpus: drop the declared trust list": ("data/emails.json",
    '"known_domains": [\n    "knowncompany.example"\n  ],', '"known_domains": [],'),
+ "log: read every run mixed together": ("src/sid_agent/log.py",
+   "    if all_runs or not rows:", "    if True or not rows:"),
  "packaging: drop a dependency from pyproject": ("pyproject.toml",
    '    "rich>=13.0",\n', ""),
+ # Regex, because anchoring this on the literal current count meant the
+ # mutation silently stopped applying the moment the count changed -- and a
+ # mutation that does not apply reports as a survivor, which is the same class
+ # of quiet failure this whole file exists to catch.
  "docs: drift the README check count": ("README.md",
-   "**96 checks passing**", "**1234 checks passing**"),
+   r"re:\*\*\d+ checks passing\*\*", "**1234 checks passing**"),
  "situations: empty ALWAYS_ESCALATE": ("src/sid_agent/situations.py",
    'ALWAYS_ESCALATE: set[Kind] = {"invoice_due", "unread_security_alert"}',
    'ALWAYS_ESCALATE: set[Kind] = set()'),
@@ -119,9 +126,18 @@ print("-" * 38 + " " + " ".join("-" * 11 for _ in H))
 undetected = []
 for name, (rel, old, new) in M.items():
     f = ROOT / rel; orig = f.read_text(encoding="utf-8")
-    if old not in orig:
-        print(f"{name:38} !! anchor missing"); undetected.append(name + " (BAD MUTATION)"); continue
-    f.write_text(orig.replace(old, new, 1), encoding="utf-8")
+    if old.startswith("re:"):
+        pattern = old[3:]
+        mutated, count = re.subn(pattern, new.replace("\\", "\\\\"), orig, count=1)
+        if not count:
+            print(f"{name:38} !! pattern never matched")
+            undetected.append(name + " (BAD MUTATION)"); continue
+    elif old not in orig:
+        print(f"{name:38} !! anchor missing")
+        undetected.append(name + " (BAD MUTATION)"); continue
+    else:
+        mutated = orig.replace(old, new, 1)
+    f.write_text(mutated, encoding="utf-8")
     try:
         codes = {h: run(h) for h in H}
     finally:
