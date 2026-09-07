@@ -235,7 +235,28 @@ check("final action is always permitted by the final lane", worst is None, str(w
 
 print("\n--- lookalike sender domains (deterministic, no model) ---")
 
-from sid_agent.domains import lookalike_of  # noqa: E402
+from sid_agent.domains import known_domains, lookalike_of  # noqa: E402
+
+
+def domains_env_after_load():
+    """What domains.py will actually defend once the corpus is loaded."""
+    return known_domains()
+
+
+# The corpus must carry its own trust list. When it did not, a fresh clone ran
+# every lookalike regression below against an empty configuration -- they passed
+# by not running. Checked here so that cannot recur silently.
+from sid_agent.dataset import apply_corpus_domains, corpus_known_domains  # noqa: E402
+
+check(
+    "the corpus declares the domains it is written against",
+    bool(corpus_known_domains()),
+    "no known_domains in data/*.json -- lookalike cases would be a no-op",
+)
+check(
+    "loading the corpus configures lookalike detection",
+    bool(apply_corpus_domains()) and bool(domains_env_after_load()),
+)
 
 KNOWN = {"knowncompany.example"}
 
@@ -258,6 +279,21 @@ check("no known domains configured -> no false positives", lookalike_of("a@anyth
 # Each of these was a confirmed miss: the same attack body from a differently
 # shaped domain sailed past the deterministic layer and landed on model
 # judgement alone.
+# The corpus must carry its own trust list. When it did not, a fresh clone ran
+# every lookalike regression below against an empty configuration -- they passed
+# by not running. Checked here so that cannot recur silently.
+from sid_agent.dataset import apply_corpus_domains, corpus_known_domains  # noqa: E402
+
+check(
+    "the corpus declares the domains it is written against",
+    bool(corpus_known_domains()),
+    "no known_domains in data/*.json -- lookalike cases would be a no-op",
+)
+check(
+    "loading the corpus configures lookalike detection",
+    bool(apply_corpus_domains()) and bool(domains_env_after_load()),
+)
+
 KNOWN = {"knowncompany.example"}
 for addr, want, why in [
     ("d@knowncompany.com", True, "TLD swap -- the most common real spoof shape"),

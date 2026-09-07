@@ -67,6 +67,8 @@ M = {
    '"invoice_due": ("none", "ESCALATE"),', '"invoice_due": ("archive", "SILENT"),'),
  "situations: taint no longer blocks": ("src/sid_agent/situations.py",
    'if situation.tainted:', 'if False and situation.tainted:'),
+ "corpus: drop the declared trust list": ("data/emails.json",
+   '"known_domains": [\n    "knowncompany.example"\n  ],', '"known_domains": [],'),
  "situations: empty ALWAYS_ESCALATE": ("src/sid_agent/situations.py",
    'ALWAYS_ESCALATE: set[Kind] = {"invoice_due", "unread_security_alert"}',
    'ALWAYS_ESCALATE: set[Kind] = set()'),

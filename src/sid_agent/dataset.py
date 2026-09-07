@@ -12,6 +12,7 @@ cases means dropping in a file -- not editing a loader.
 """
 
 import json
+import os
 from pathlib import Path
 
 from .read import prepare
@@ -51,6 +52,35 @@ class Case:
         return "adversarial" in self.tags
 
 
+def corpus_known_domains(directory: Path | None = None) -> list[str]:
+    """The domains the corpus declares as the user's own."""
+    found: list[str] = []
+    for f in corpus_files(directory):
+        blob = json.loads(f.read_text(encoding="utf-8"))
+        found.extend(blob.get("known_domains", []))
+    return sorted(set(found))
+
+
+def apply_corpus_domains(directory: Path | None = None) -> list[str]:
+    """
+    Point domains.py at the corpus's own trust list, unless one is already set.
+
+    `domains.py` only defends domains it has been told about, and that list
+    normally comes from SID_KNOWN_DOMAINS in .env -- which is gitignored. So a
+    fresh clone ran the corpus with an empty trust list, every lookalike case
+    quietly degraded to a no-op, and `worst_case.py` reported 1/22 adversarial
+    emails held by code where the configured repo reported 6/22. A regression
+    test that silently stops testing is the same failure as a loop over an
+    empty set: green, specific, and meaningless.
+
+    `setdefault`, not assignment: a real deployment's own list always wins.
+    """
+    declared = corpus_known_domains(directory)
+    if declared:
+        os.environ.setdefault("SID_KNOWN_DOMAINS", ",".join(declared))
+    return declared
+
+
 def load(path: Path | None = None) -> list[Case]:
     """
     Read the corpus and mask every email exactly as a real one would be.
@@ -59,6 +89,7 @@ def load(path: Path | None = None) -> list[Case]:
     data/. Duplicate ids across files are a mistake worth failing on rather than
     silently letting one entry shadow another.
     """
+    apply_corpus_domains()
     paths = [path] if path else corpus_files()
 
     entries: list[dict] = []

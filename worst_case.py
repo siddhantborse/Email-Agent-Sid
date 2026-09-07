@@ -119,7 +119,21 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args()
 
-    cases = load()
+    cases = load()  # also points domains.py at the corpus's declared trust list
+
+    # Without a trust list the lookalike layer is a no-op and every domain-based
+    # regression in the corpus quietly stops testing. The measured effect is
+    # large -- 6/22 adversarial emails held by code becomes 1/22 -- so this is
+    # an error, not a warning.
+    if not domains.known_domains():
+        console.print(
+            "[bold red]No known domains configured, so lookalike detection is "
+            "disabled.[/]\n[yellow]  Every domain-based case would score as "
+            "'model-only' and the headline number\n  would be wrong. Set "
+            "SID_KNOWN_DOMAINS, or declare known_domains in the corpus.[/]"
+        )
+        return 1
+
     if args.adversarial:
         cases = [c for c in cases if c.adversarial]
 
