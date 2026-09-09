@@ -16,3 +16,8 @@ Scripts/
 Include/
 Lib/
 pyvenv.cfg
+
+# Build artifacts from `pip install -e .`
+*.egg-info/
+build/
+dist/
